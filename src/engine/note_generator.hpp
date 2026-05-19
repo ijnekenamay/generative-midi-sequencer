@@ -44,9 +44,10 @@ public:
      * @param mutation_rate Probability of mutating the looping bit (0 to 100).
      *                      0 = perfectly locked loop
      *                      100 = completely random sequence
+     * @param mutated Optional pointer to boolean set to true if a random mutation occurs.
      * @return The raw 8-bit DAC-like value extracted from the register.
      */
-    uint8_t step(uint8_t mutation_rate);
+    uint8_t step(uint8_t mutation_rate, bool* mutated = nullptr);
 
     /**
      * Quantizes a raw 8-bit value to a specified scale and root note.

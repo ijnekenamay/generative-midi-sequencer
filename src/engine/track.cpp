@@ -2,6 +2,8 @@
 #include "pico/rand.h"
 #include "pico/time.h"
 
+extern volatile bool shared_track_mutated[4];
+
 Track::Track(uint8_t id, uint8_t channel) 
     : track_id(id), midi_channel(channel) {
     reset();
@@ -68,7 +70,11 @@ bool Track::tick(uint32_t master_tick, uint32_t bpm, MidiHandler& midi) {
         
         if (triggered) {
             // Step the Turing Machine to fetch a new pitch
-            uint8_t raw_cv = pitch.step(mutation_rate);
+            bool mutated = false;
+            uint8_t raw_cv = pitch.step(mutation_rate, &mutated);
+            if (mutated) {
+                shared_track_mutated[track_id] = true;
+            }
             
             // Quantize pitch to the track's scale and root note
             uint8_t note = NoteGenerator::quantize(raw_cv, root_note, scale_type);

@@ -32,7 +32,10 @@ void NoteGenerator::randomize_seed() {
     }
 }
 
-uint8_t NoteGenerator::step(uint8_t mutation_rate) {
+uint8_t NoteGenerator::step(uint8_t mutation_rate, bool* mutated) {
+    if (mutated) {
+        *mutated = false;
+    }
     // Get the LSB (last bit of the shift register)
     bool feedback_bit = (shift_register & 0x0001) != 0;
     
@@ -41,6 +44,9 @@ uint8_t NoteGenerator::step(uint8_t mutation_rate) {
     uint32_t r = get_rand_32() % 100;
     if (r < mutation_rate) {
         feedback_bit = !feedback_bit;
+        if (mutated) {
+            *mutated = true;
+        }
     }
     
     // Shift right and inject feedback bit into MSB (bit 15)
