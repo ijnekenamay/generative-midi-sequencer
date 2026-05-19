@@ -5,6 +5,7 @@
 #include "hardware/pio.h"
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
+#include "hardware/sync.h"
 #include "engine/track.hpp"
 #include "engine/midi_handler.hpp"
 #include "engine/storage_manager.hpp"
@@ -14,18 +15,29 @@
 
 // --- IPC Shared Memory Structures ---
 
+// Spinlock for thread-safe parameter transfers between Core 0 and Core 1
+spin_lock_t *shared_params_lock = nullptr;
+
+uint32_t lock_shared_params() {
+    return spin_lock_blocking(shared_params_lock);
+}
+void unlock_shared_params(uint32_t save) {
+    spin_unlock(shared_params_lock, save);
+}
+
 // Share sequencer settings between Core 0 and Core 1
 TrackParams shared_params[4] = {
-    {16, 4, 0, 0, 36, SCALE_MINOR_PENTATONIC, 6, false}, // T1 (Kick/Bass)
-    {16, 5, 2, 30, 60, SCALE_PHRYGIAN, 6, false},        // T2 (Stochastic Lead)
-    {16, 8, 3, 10, 72, SCALE_CHROMATIC, 3, false},       // T3 (Hi-hats/Offbeats)
-    {16, 3, 0, 15, 48, SCALE_DORIAN, 12, false}          // T4 (Drone/Chord)
+    {16, 4, 0, 0, 36, SCALE_MINOR_PENTATONIC, 6, 0, 50, false}, // T1 (Kick/Bass)
+    {16, 5, 2, 30, 60, SCALE_PHRYGIAN, 6, 0, 50, false},        // T2 (Stochastic Lead)
+    {16, 8, 3, 10, 72, SCALE_CHROMATIC, 3, 0, 50, false},       // T3 (Hi-hats/Offbeats)
+    {16, 3, 0, 15, 48, SCALE_DORIAN, 12, 0, 50, false}          // T4 (Drone/Chord)
 };
 
 // Core 1 to Core 0 feedback (for visual step indicator)
 volatile uint8_t shared_current_step[4] = {0, 0, 0, 0};
 volatile bool shared_step_hit[4] = {false, false, false, false};
 volatile bool sequencer_playing = true;
+volatile uint16_t shared_bpm = 120;
 volatile uint32_t shared_master_ticks = 0; // Share tick counter for beat synchronization
 
 // Core 1 state & objects
@@ -128,10 +140,10 @@ DisplayController display;
 
 // Navigation States
 uint8_t cursor_track = 0; // 0 to 3
-uint8_t cursor_col = 0;   // 0 to 6 (SPD, LEN, DEN, SHF, MUT, ROT, SCL)
+uint8_t cursor_col = 0;   // 0 to 8 (SPD, LEN, DEN, SHF, MUT, JIT, GAT, ROT, SCL)
 
-const char* column_headers[6] = {
-    "LEN", "DEN", "SHF", "MUT", "ROT", "SCL"
+const char* column_headers[8] = {
+    "LEN", "DEN", "SHF", "MUT", "JIT", "GAT", "ROT", "SCL"
 };
 
 // --- Custom 8x8 Pixel Art Bitmaps ---
@@ -186,6 +198,14 @@ void draw_bitmap(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t* 
 
 // Render Helper
 void draw_ui_dashboard() {
+    // Thread-safe parameters copying under spinlock to prevent torn reads during Core 0 drawing
+    TrackParams draw_params[4];
+    uint32_t lock_save = lock_shared_params();
+    for (int i = 0; i < 4; ++i) {
+        draw_params[i] = shared_params[i];
+    }
+    unlock_shared_params(lock_save);
+
     // ----------------------------------------------------
     // 1. Draw Full-Width Header Area (Y: 0 to 48)
     // ----------------------------------------------------
@@ -204,8 +224,9 @@ void draw_ui_dashboard() {
     // Draw solid backplate for master clock text to enable smooth inversion flashing
     display.fill_rect(16, 8, 62, 32, bpm_bg);
 
-    // Render large 16x24 bold digits for "120" with a pitch of 18 pixels (leaving a 2px gutter)
-    char bpm_str[8] = "120";
+    // Render large 16x24 bold digits for the actual BPM
+    char bpm_str[8];
+    sprintf(bpm_str, "%03d", shared_bpm);
     for (int i = 0; i < 3; ++i) {
         uint8_t digit = bpm_str[i] - '0';
         draw_bitmap(20 + i * 18, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
@@ -223,7 +244,7 @@ void draw_ui_dashboard() {
     // State 2: Active Track Scale Mode
     draw_bitmap(180, 12, 8, 8, icon_note, COLOR_WHITE, COLOR_BLACK);
     char scale_lbl[8];
-    sprintf(scale_lbl, "SCL:S%d", shared_params[cursor_track].scale_type + 1);
+    sprintf(scale_lbl, "SCL:S%d", draw_params[cursor_track].scale_type + 1);
     display.draw_text(194, 12, scale_lbl, COLOR_LIGHT_GREY, COLOR_BLACK, 1);
 
     // State 3: Storage Safe Command Save using the high-definition 16x16 floppy disk icon
@@ -239,7 +260,7 @@ void draw_ui_dashboard() {
     // ----------------------------------------------------
     for (int trk = 0; trk < 4; ++trk) {
         uint16_t trk_y = 48 + trk * 48;
-        bool is_muted = shared_params[trk].is_muted;
+        bool is_muted = draw_params[trk].is_muted;
 
         // Bottom divider for each row
         display.fill_rect(0, trk_y + 47, 320, 1, COLOR_DARK_GREY);
@@ -259,7 +280,7 @@ void draw_ui_dashboard() {
 
         // Format Clock Divide into speed multiplication factor (large bold size 2)
         char spd_str[6];
-        uint8_t div = shared_params[trk].clock_divide;
+        uint8_t div = draw_params[trk].clock_divide;
         if (div == 24) sprintf(spd_str, "x1");
         else if (div == 12) sprintf(spd_str, "x2");
         else if (div == 6)  sprintf(spd_str, "x4");
@@ -292,9 +313,9 @@ void draw_ui_dashboard() {
         // Vertical boundary dividing Channel speed and parameter grid
         display.fill_rect(42, trk_y + 4, 1, 38, COLOR_DARK_GREY);
 
-        // B. Right Column: Expanded Parameter Grid Cells (Col 1 to 6 starts at X: 48)
-        for (int col = 1; col <= 6; ++col) {
-            uint16_t cell_x = 48 + (col - 1) * 45;
+        // B. Right Column: Expanded Parameter Grid Cells (Col 1 to 8 starts at X: 45)
+        for (int col = 1; col <= 8; ++col) {
+            uint16_t cell_x = 45 + (col - 1) * 34;
             uint16_t cell_y = trk_y + 4;
 
             bool is_selected = (cursor_track == trk && cursor_col == col);
@@ -308,41 +329,43 @@ void draw_ui_dashboard() {
                 fg = is_selected ? COLOR_BLACK : COLOR_LIGHT_GREY;
             }
 
-            // Draw widened parameter cell box
-            display.fill_rect(cell_x, cell_y, 41, 20, bg);
+            // Draw parameter cell box (width 30, height 20)
+            display.fill_rect(cell_x, cell_y, 30, 20, bg);
 
             if (!is_selected) {
-                display.draw_rect(cell_x, cell_y, 41, 20, COLOR_DARK_GREY);
+                display.draw_rect(cell_x, cell_y, 30, 20, COLOR_DARK_GREY);
             }
 
             char val_str[6] = "";
             switch (col) {
-                case 1: sprintf(val_str, "%02d", shared_params[trk].length); break;
-                case 2: sprintf(val_str, "%02d", shared_params[trk].density); break;
-                case 3: sprintf(val_str, "%02d", shared_params[trk].shift); break;
-                case 4: sprintf(val_str, "%02d", shared_params[trk].mutation); break;
-                case 5: sprintf(val_str, "%02d", shared_params[trk].root_note); break;
-                case 6: sprintf(val_str, "S%d", shared_params[trk].scale_type + 1); break;
+                case 1: sprintf(val_str, "%02d", draw_params[trk].length); break;
+                case 2: sprintf(val_str, "%02d", draw_params[trk].density); break;
+                case 3: sprintf(val_str, "%02d", draw_params[trk].shift); break;
+                case 4: sprintf(val_str, "%02d", draw_params[trk].mutation); break;
+                case 5: sprintf(val_str, "%02d", draw_params[trk].jitter); break;
+                case 6: sprintf(val_str, "%02d", draw_params[trk].gate); break;
+                case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
+                case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
             }
-            display.draw_text(cell_x + 10, cell_y + 6, val_str, fg, bg, 1);
+            display.draw_text(cell_x + 5, cell_y + 6, val_str, fg, bg, 1);
             
             // Draw column header label at the top of Channel 1 only
             if (trk == 0) {
-                display.draw_text(cell_x + 10, trk_y - 12, column_headers[col - 1], COLOR_GREY, COLOR_BLACK, 1);
+                display.draw_text(cell_x + 6, trk_y - 12, column_headers[col - 1], COLOR_GREY, COLOR_BLACK, 1);
             }
         }
 
         // C. Expanded Visual Step Playhead Strip
         uint16_t steps_y = trk_y + 34;
-        display.fill_rect(48, steps_y, 266, 4, COLOR_BLACK);
+        display.fill_rect(45, steps_y, 268, 4, COLOR_BLACK);
 
-        uint8_t len = shared_params[trk].length;
+        uint8_t len = draw_params[trk].length;
         uint8_t curr = shared_current_step[trk];
         bool is_hit = shared_step_hit[trk];
 
-        uint16_t step_w = 262 / len;
+        uint16_t step_w = 264 / len;
         for (uint8_t s = 0; s < len; ++s) {
-            uint16_t sx = 48 + s * step_w;
+            uint16_t sx = 45 + s * step_w;
             uint16_t sc;
             
             if (is_muted) {
@@ -357,6 +380,9 @@ void draw_ui_dashboard() {
 
 // Core 1 Entry Point (Realtime MIDI and Generative Engine)
 void core1_entry() {
+    // Enable multicore lockout capability so Core 0 can safely halt Core 1 during flash erase/write
+    multicore_lockout_victim_init();
+
     // 1. Initialize hardware UART0 MIDI OUT
     midi.init();
     
@@ -367,28 +393,44 @@ void core1_entry() {
     // pico timer with negative interval schedules execution relative to the start of the last callback, maintaining precise frequency
     add_repeating_timer_us(-45, i2s_timer_callback, NULL, &i2s_timer);
     
-    // 4. Set initial parameters from shared memory
+    // 4. Set initial parameters from shared memory thread-safely
     for (int i = 0; i < 4; ++i) {
+        TrackParams local_p;
+        uint32_t lock_save = lock_shared_params();
+        local_p = shared_params[i];
+        unlock_shared_params(lock_save);
+
         tracks[i].set_params(
-            shared_params[i].length,
-            shared_params[i].density,
-            shared_params[i].shift,
-            shared_params[i].mutation,
-            shared_params[i].root_note,
-            (ScaleType)shared_params[i].scale_type,
-            shared_params[i].clock_divide,
-            shared_params[i].is_muted
+            local_p.length,
+            local_p.density,
+            local_p.shift,
+            local_p.mutation,
+            local_p.root_note,
+            (ScaleType)local_p.scale_type,
+            local_p.clock_divide,
+            local_p.jitter,
+            local_p.gate,
+            local_p.is_muted
         );
     }
     
-    // Master clock loop running at 120 BPM driving 24 PPQN MIDI clocks (20.83ms intervals)
+    // Master clock loop running at shared_bpm driving 24 PPQN MIDI clocks
     // Using a precise microsecond sleep timer based on the RP2040 system clock
-    uint32_t target_tick_us = (60 * 1000000) / (120 * 24); // 20833 microseconds per tick (at 120 BPM)
+    uint32_t target_tick_us = (60 * 1000000) / (shared_bpm * 24);
     uint64_t next_tick_time = time_us_64() + target_tick_us;
     
     while (true) {
+        // Continuous polling for scheduled MIDI events (Jitter note-on delay and Gate length note-off)
+        for (int i = 0; i < 4; ++i) {
+            tracks[i].update_scheduled_events(shared_bpm, midi);
+        }
+
         if (sequencer_playing) {
             uint64_t now = time_us_64();
+            
+            // Re-calculate target tick microsecond duration dynamically based on potentially adjusted real-time BPM
+            target_tick_us = (60 * 1000000) / (shared_bpm * 24);
+
             if (now >= next_tick_time) {
                 // A. Send standard serial MIDI clock tick over UART0 TX (GP0)
                 midi.send_clock();
@@ -399,20 +441,27 @@ void core1_entry() {
                 
                 // C. Tick all 4 tracks to advance their playheads and generate generative MIDI notes
                 for (int i = 0; i < 4; ++i) {
-                    // Update track parameters live from Core 0 shared memory
+                    // Update track parameters live and thread-safely from Core 0 shared memory
+                    TrackParams local_p;
+                    uint32_t lock_save = lock_shared_params();
+                    local_p = shared_params[i];
+                    unlock_shared_params(lock_save);
+
                     tracks[i].set_params(
-                        shared_params[i].length,
-                        shared_params[i].density,
-                        shared_params[i].shift,
-                        shared_params[i].mutation,
-                        shared_params[i].root_note,
-                        (ScaleType)shared_params[i].scale_type,
-                        shared_params[i].clock_divide,
-                        shared_params[i].is_muted
+                        local_p.length,
+                        local_p.density,
+                        local_p.shift,
+                        local_p.mutation,
+                        local_p.root_note,
+                        (ScaleType)local_p.scale_type,
+                        local_p.clock_divide,
+                        local_p.jitter,
+                        local_p.gate,
+                        local_p.is_muted
                     );
                     
                     // Tick the track and capture if a note was fired
-                    bool hit = tracks[i].tick(shared_master_ticks, midi);
+                    bool hit = tracks[i].tick(shared_master_ticks, shared_bpm, midi);
                     
                     // Share playhead/hit indicators back to Core 0 UI thread using volatile memory
                     shared_current_step[i] = tracks[i].get_current_step();
@@ -437,6 +486,9 @@ int main() {
     display.init();
     display.clear(COLOR_BLACK);
 
+    // Initialize the spinlock for safe parameter copies between Core 0 and Core 1
+    shared_params_lock = spin_lock_init(spin_lock_claim_unused(true));
+
     // Instantiate and attempt loading settings from internal Flash
     StorageManager storage;
     storage.load(shared_params);
@@ -459,40 +511,53 @@ int main() {
 
         // Handle navigation D-pad
         if (input.is_pressed(KEY_UP)) {
-            if (cursor_track > 0) { cursor_track--; value_changed = true; }
+            if (input.is_shift_active()) {
+                // Shift + UP: Increment global BPM
+                shared_bpm = (shared_bpm + 5 <= 250) ? shared_bpm + 5 : 250;
+                value_changed = true;
+            } else {
+                if (cursor_track > 0) { cursor_track--; value_changed = true; }
+            }
         }
         if (input.is_pressed(KEY_DOWN)) {
-            if (cursor_track < 3) { cursor_track++; value_changed = true; }
+            if (input.is_shift_active()) {
+                // Shift + DOWN: Decrement global BPM
+                shared_bpm = (shared_bpm - 5 >= 40) ? shared_bpm - 5 : 40;
+                value_changed = true;
+            } else {
+                if (cursor_track < 3) { cursor_track++; value_changed = true; }
+            }
         }
         if (input.is_pressed(KEY_LEFT)) {
             if (cursor_col > 0) { cursor_col--; value_changed = true; }
         }
         if (input.is_pressed(KEY_RIGHT)) {
-            if (cursor_col < 6) { cursor_col++; value_changed = true; }
+            if (cursor_col < 8) { cursor_col++; value_changed = true; }
         }
 
         // Handle MUTE toggle (RT button toggles mute on currently selected track)
         if (input.is_pressed(KEY_RT)) {
+            uint32_t lock_save = lock_shared_params();
             shared_params[cursor_track].is_muted = !shared_params[cursor_track].is_muted;
+            unlock_shared_params(lock_save);
             value_changed = true;
         }
 
         // Handle Play/Stop toggle (and Shift + Play to save to flash)
         if (input.is_pressed(KEY_PLAY)) {
             if (input.is_shift_active()) {
-                // Safely pause Core 1 playback to prevent reading from flash (XIP Cache) during erase/write
-                bool was_playing = sequencer_playing;
-                sequencer_playing = false;
-                sleep_ms(50); // Settle Core 1 into idle sleep
+                // Halts Core 1 immediately and blocks any memory access during write using Pico Lockout API
+                multicore_lockout_start_blocking();
                 
                 storage.save(shared_params);
+                
+                multicore_lockout_end_blocking();
                 
                 // Visual confirmation: Invert title bar and display save message
                 display.fill_rect(0, 0, 320, 48, COLOR_WHITE);
                 display.draw_text(30, 16, "SETTINGS SAVED TO FLASH", COLOR_BLACK, COLOR_WHITE, 2);
                 sleep_ms(800); // Keep message on screen for ergonomic feedback
                 
-                sequencer_playing = was_playing;
                 force_redraw = true;
             } else {
                 sequencer_playing = !sequencer_playing;
@@ -514,7 +579,10 @@ int main() {
 
         if (input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A)) {
             value_changed = true;
-            TrackParams& p = shared_params[cursor_track];
+            
+            uint32_t lock_save = lock_shared_params();
+            TrackParams p = shared_params[cursor_track];
+            
             switch (cursor_col) {
                 case 0: { // Clock Divide / Speed select
                     // Standard divisions: 3, 4, 6, 8, 12, 24, 48
@@ -531,14 +599,22 @@ int main() {
                 case 2: p.density = (p.density + step_size <= p.length) ? p.density + step_size : p.length; break;
                 case 3: p.shift = (p.shift + step_size <= 32) ? p.shift + step_size : 32; break;
                 case 4: p.mutation = (p.mutation + step_size <= 100) ? p.mutation + step_size : 100; break;
-                case 5: p.root_note = (p.root_note + step_size <= 127) ? p.root_note + step_size : 127; break;
-                case 6: p.scale_type = (p.scale_type + 1 < SCALE_COUNT) ? p.scale_type + 1 : 0; break;
+                case 5: p.jitter = (p.jitter + step_size <= 100) ? p.jitter + step_size : 100; break;
+                case 6: p.gate = (p.gate + step_size <= 100) ? p.gate + step_size : 100; break;
+                case 7: p.root_note = (p.root_note + step_size <= 127) ? p.root_note + step_size : 127; break;
+                case 8: p.scale_type = (p.scale_type + 1 < SCALE_COUNT) ? p.scale_type + 1 : 0; break;
             }
+            
+            shared_params[cursor_track] = p;
+            unlock_shared_params(lock_save);
         }
 
         if (input.is_pressed(KEY_B) || input.is_long_pressed(KEY_B)) {
             value_changed = true;
-            TrackParams& p = shared_params[cursor_track];
+            
+            uint32_t lock_save = lock_shared_params();
+            TrackParams p = shared_params[cursor_track];
+            
             switch (cursor_col) {
                 case 0: { // Clock Divide / Speed select
                     if (p.clock_divide == 48) p.clock_divide = 24;
@@ -554,9 +630,14 @@ int main() {
                 case 2: p.density = (p.density - step_size >= 0) ? p.density - step_size : 0; break;
                 case 3: p.shift = (p.shift - step_size >= 0) ? p.shift - step_size : 0; break;
                 case 4: p.mutation = (p.mutation - step_size >= 0) ? p.mutation - step_size : 0; break;
-                case 5: p.root_note = (p.root_note - step_size >= 0) ? p.root_note - step_size : 0; break;
-                case 6: p.scale_type = (p.scale_type > 0) ? p.scale_type - 1 : SCALE_COUNT - 1; break;
+                case 5: p.jitter = (p.jitter - step_size >= 0) ? p.jitter - step_size : 0; break;
+                case 6: p.gate = (p.gate - step_size >= 10) ? p.gate - step_size : 10; break;
+                case 7: p.root_note = (p.root_note - step_size >= 0) ? p.root_note - step_size : 0; break;
+                case 8: p.scale_type = (p.scale_type > 0) ? p.scale_type - 1 : SCALE_COUNT - 1; break;
             }
+            
+            shared_params[cursor_track] = p;
+            unlock_shared_params(lock_save);
         }
 
         // Draw UI dashboard

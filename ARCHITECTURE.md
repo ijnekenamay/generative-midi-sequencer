@@ -12,7 +12,7 @@ RP2040に搭載された2基の ARM Cortex-M0+ コアを完全に独立させ、
 graph TD
     subgraph Core0 ["Core 0: UI & System Thread (Non-Realtime)"]
         A[InputManager] -->|9-key events| B[UI State / Grid Cursor]
-        B -->|Volatile writes| C[shared_params]
+        B -->|Volatile writes| C["shared_params (Spinlock Protected)"]
         D[StorageManager] -->|Flash Read/Write| C
         B -->|Render Grid| E[DisplayController]
         E -->|TFT SPI| F[3.2" ILI9341 Screen]
@@ -39,19 +39,19 @@ graph TD
 
 ### Core 1: リアルタイム・シーケンス & クロック同期
 ハードウェアタイマーおよび高精度マイクロ秒ループを独占し、100%正確なタイミングでMIDIメッセージやトリガーパルスを放射します。
-*   **Master Clock Generator**: RP2040の `time_us_64()` ハードウェアタイマーを使用して、120 BPM（24 PPQN = 20.83ms周期）のマスタークロック信号を生成。スレッドプリエンプション（割り込みによる遅延）を防ぐため、Core 1自体は `tight_loop_contents()` を備えた極限まで緊密なポーリングループで待機します。
-*   **Generative Sequence Coordinator (`Track 1`〜`Track 4`)**: 4系統のトラックインスタンスを保有。マスタークロックが進行する度に、共有メモリからそのトラックの最新パラメータを即座にローカルに反映（シャドウイング）させ、リズムとピッチの計算を実行します。
+*   **Master Groove Clock Generator**: RP2040の `time_us_64()` ハードウェアタイマーを使用して、リアルタイム可変の `shared_bpm`（24 PPQN 周期）のマスタークロック信号を生成。スレッドプリエンプション（割り込みによる遅延）を防ぐため、Core 1自体は `tight_loop_contents()` を備えた極限まで緊密なポーリングループで待機します。
+*   **Generative Sequence Coordinator (`Track 1`〜`Track 4`)**: 4系統のトラックインスタンスを保有。マスタークロックが進行する度に、共有メモリからそのトラックの最新パラメータをスピンロック経由で安全にローカルに反映（シャドウイング）させ、リズムとピッチの計算を実行します。
 *   **`MidiHandler` (UART 送信)**: ボーレート 31,250 bps の標準シリアルMIDI信号を UART0 TX (GP0) からダイレクトに送信します。
 *   **PIO I2S Analog Sync Pulse Controller**: 22.05 kHz の割り込みタイマーコールバック（`i2s_timer_callback`）から、PIO0のI2Sステレオ送信FIFOにサンプルデータ（+3.3Vゲートまたは0V）を連続供給。MIDIクロックと同期したアナログパルス信号を出力させます。
 
 ---
 
-## 2. ロックフリー・コア間通信 (Inter-Core IPC)
+## 2. スピンロック付き共有メモリ通信モデル (Spinlock-Protected IPC)
 
-リアルタイムスレッド（Core 1）がUI描画（Core 0）によるミューテックスのロック解放待ちなどでブロックされることを避けるため、スピンロックやセマフォなどの排他制御を一切使用しない **「ロックフリー揮発性共有メモリモデル (Lock-Free Volatile Shared Memory)」** を採用しています。
+Core 0 (UI/描画スレッド) と Core 1 (リアルタイムMIDIスレッド) 間のパラメータ通信には、RP2040のハードウェア・スピンロック (`spin_lock_t*`) による排他制御を採用しています。これにより、Core 0がパラメータを変更している最中に Core 1 がデータを取得しても、構造体データの「断片化（データティアリング）」や「不整合」が論理的に発生しない安全なアーキテクチャを実現しています。
 
 ```cpp
-// Core 0 (UI) から Core 1 (Engine) への単方向パラメータ伝達
+// Core 0 (UI) から Core 1 (Engine) への共有パラメータ構造体
 struct TrackParams {
     volatile uint8_t length;       // ループステップ数 (1〜32)
     volatile uint8_t density;      // 発音パルス数 (0〜Length)
@@ -60,6 +60,8 @@ struct TrackParams {
     volatile uint8_t root_note;    // 量子化ルート音 (MIDI値)
     volatile uint8_t scale_type;   // 量子化スケールID
     volatile uint8_t clock_divide; // クロック分周比
+    volatile uint8_t jitter;       // マイクロタイミング・ジッター (0〜100%)
+    volatile uint8_t gate;         // ゲート長さ (10〜100%)
     volatile bool is_muted;        // ミュート状態
 };
 extern TrackParams shared_params[4];
@@ -68,12 +70,14 @@ extern TrackParams shared_params[4];
 extern volatile uint8_t shared_current_step[4]; // 各トラックの再生中のカレントステップ
 extern volatile bool shared_step_hit[4];        // トリガー発音ヒットの瞬間 (フラッシュ用)
 extern volatile bool sequencer_playing;         // グローバル再生・停止フラグ
+extern volatile uint16_t shared_bpm;            // リアルタイム可変BPM値
 extern volatile uint32_t shared_master_ticks;   // 積算マスタークロック
 ```
 
-### IPC動作のデータ安全性保証
-1.  **アトミックライト／リード**: RP2040 (Cortex-M0+) のバス幅である32ビット以下の整数データ（`uint8_t`, `bool`等）のみを共有変数として使用しているため、メモリの読み書き操作はCPU命令レベルで常に1サイクル（アトミック）で完結します。したがって、部分書き換えによるデータの破損は論理的に発生しません。
-2.  **揮発性修飾（`volatile`）**: コンパイラの最適化によるレジスタキャッシュを強制的にバイパスし、常に実RAMへの読み出し・書き込みを強制します。
+### IPC動作 of データ安全性保証
+1.  **ハードウェア・スピンロック (`spin_lock_t*`)**: Core 0 側でパラメータを変更する際、および Core 1 側でパラメータをローカルへシャドウイングコピーする際、スピンロック(`shared_params_lock`)をロックして操作をアトミックに行います。これにより、マルチバイトにまたがるパラメータデータが完璧に一貫して送受信されます。
+2.  **ダブルバッファリング描画**: Core 0 の画面描画スレッド（`draw_ui_dashboard`）では、描画開始時にスピンロックを掛けて `shared_params` をローカルの `draw_params` バッファに一瞬で一括コピーし、その後ロックを解放して描画を行います。これにより、描画処理の遅延がシーケンサの再生ジッターに影響を与えることが絶対にありません。
+3.  **アトミックライト／リード**: 単一の `shared_bpm` や `sequencer_playing` などのスカラー値は、CPU命令レベルで常に1サイクルで完結（アトミック）するため、不要なロックを取得せず高速に読み書きを行います。
 
 ---
 
@@ -109,7 +113,7 @@ public:
 ```
 
 ### 3.3. `Track`
-リズム生成とピッチ生成、およびMIDIノートオフのライフサイクルを制御するコアエンジンクラスです。
+リズム生成とピッチ生成、および非同期にスケジュールされるマイクロタイミング・ジッターとゲート長の非同期イベント消滅（ノートオフ）のライフサイクルを制御するコアシーケンスクラスです。
 ```cpp
 class Track {
 private:
@@ -120,17 +124,30 @@ private:
     uint8_t current_step;
     uint8_t last_played_note;
     bool is_note_active;
+    
     // シャドウパラメータ
     uint8_t length, density, shift, mutation_rate, root_note;
     ScaleType scale_type;
     uint8_t clock_divide;
+    uint8_t jitter_rate; // 0 to 100
+    uint8_t gate_rate;   // 10 to 100
     bool is_muted;
+
+    // 非同期ノートスケジューラ
+    uint64_t pending_note_on_time;
+    uint8_t pending_note;
+    bool has_pending_note;
+    uint64_t pending_note_off_time;
+    bool has_pending_note_off;
+
 public:
     Track(uint8_t id, uint8_t channel);
     void reset();
-    void set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint8_t root, ScaleType scale, uint8_t divide, bool muted);
-    // クロックtickに合わせて進み、トリガーが発生した場合はMIDI NoteOnを出力
-    bool tick(uint32_t master_tick, MidiHandler& midi);
+    void set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint8_t root, ScaleType scale, uint8_t divide, uint8_t jit, uint8_t gt, bool muted);
+    // クロックtickに合わせてシーケンスを進め、トリガー決定時にNoteOnを時間遅延込みでスケジュール
+    bool tick(uint32_t master_tick, uint32_t bpm, MidiHandler& midi);
+    // 非同期スケジューラ処理を回すため、Core 1 の超高速ポーリングループから連続呼び出しされる
+    void update_scheduled_events(uint32_t bpm, MidiHandler& midi);
     // 現在の音階発音を強制的に停止 (NoteOff)
     void silence(MidiHandler& midi);
     uint8_t get_current_step() const { return current_step; }
@@ -156,29 +173,32 @@ public:
 
 ---
 
-## 4. XIPキャッシュクラッシュを回避するフラッシュセーブシーケンス
+## 4. XIPキャッシュクラッシュを回避するマルチコア・ロックアウト (Multicore Lockout)
 
-RP2040は、実行中のコードプログラムをQSPIフラッシュメモリから直接読み出して実行する（XIP: Execute In Place）方式をとっています。フラッシュの消去・書き込みを行っている瞬間は、CPUからフラッシュを読み出すことができず、このタイミングで割り込み処理等が走ると **XIPキャッシュ不在によるCPUクラッシュ (HardFault)** が即座に発生します。
+RP2040は、実行中のコードプログラムをQSPIフラッシュメモリから直接読み出して実行する（XIP: Execute In Place）方式をとっています。フラッシュの消去・書き込みを行っている瞬間は、CPUからフラッシュを読み出すことができず、このタイミングで別コア（Core 1）がフラッシュへアクセスすると、**XIPキャッシュ不在によるCPUクラッシュ (HardFault)** が即座に発生します。
 
-本プロジェクトでは、これを回避するため以下の厳密なフラッシュセーブシーケンスを実装しています。
+本プロジェクトでは、スリープによる曖昧な待機ではなく、Pico SDK標準の **「マルチコア・ロックアウト (Multicore Lockout) API」** を導入し、100%安全かつ堅牢なフラッシュ保存処理を実現しています。
 
 ```mermaid
 sequenceDiagram
-    participant Core0 as Core 0 (UI & Flash Write)
+    participant Core0 as Core 0 (UI & Flash Save)
     participant Core1 as Core 1 (Clock Engine)
     
-    Note over Core0: ユーザーが Shift + Play を押下
-    Core0->>Core1: volatile sequencer_playing = false
-    Note over Core0: sleep_ms(50) でCore1の休止を待機
+    Note over Core0: ユーザーが Shift + Play を押下 (Save)
+    Core0->>Core1: multicore_lockout_start_blocking() 発行
+    Note over Core1: ロックアウト割り込み発生、Core 1 が即座に一時停止
     Note over Core0: save_and_disable_interrupts() 実行
     Note over Core0: フラッシュセクター消去 (flash_range_erase)
     Note over Core0: データ書き込み (flash_range_program)
     Note over Core0: restore_interrupts() 実行
-    Core0->>Core1: volatile sequencer_playing = true
-    Note over Core0: UI画面に「SETTINGS SAVED」を800ms表示
+    Core0->>Core1: multicore_lockout_end_blocking() 発行
+    Note over Core1: Core 1 動作再開 (低ジッター演奏へ復帰)
+    Note over Core0: UI画面に「SETTINGS SAVED」表示
 ```
 
-1.  **Core 1の休止**: Core 0が `sequencer_playing` を `false` に設定し、Core 1を `tight_loop_contents()` による完全なアイドルポーリング状態に強制移行させます。
-2.  **割り込みの完全な禁止**: Core 0は `save_and_disable_interrupts()` を呼び出し、ローカルのハードウェア割り込みやSystickタイマーを完全に無効化します。
-3.  **フラッシュ操作の安全実行**: この状態において、安全にセクター消去（`flash_range_erase`）およびデータ保存（`flash_range_program`）を実施します。
-4.  **復帰**: 割り込みを元の状態へ復帰させ、`sequencer_playing` を元の状態に戻してCore 1のシーケンス演奏を安全に再開します。
+### ロックアウト動作プロセスの詳細
+1.  **ロックアウトの始動**: Core 1 は起動時（`core1_entry()`）に `multicore_lockout_victim_init()` を呼び出して、ロックアウト要求の受付リスナー（FIFOハンドラ割り込み）を事前に登録しておきます。
+2.  **Core 1 の完全強制停止**: Core 0 がフラッシュ保存の処理に入る直前に `multicore_lockout_start_blocking()` を呼び出します。これにより、Core 1 の実行はハードウェアレベルで即座に一時停止（ロックアウト状態）となり、フラッシュ上のあらゆる命令コードや読み込み領域へのアクセスが一切遮断されます。
+3.  **割り込みの完全な禁止**: Core 0 は `save_and_disable_interrupts()` を呼び出し、Core 0 自身がフラッシュ操作中に他の割り込みルーチンにジャンプするのを防ぎます。
+4.  **フラッシュ操作の安全実行**: この完全防護された状態で、フラッシュ消去（`flash_range_erase`）および保存書き込み（`flash_range_program`）が実行されます。
+5.  **ロックアウトの解除と再開**: 保存完了後、Core 0 が `multicore_lockout_end_blocking()` を呼び出すことで Core 1 は停止した場所から何事もなかったかのように安全に動作を再開します。これにより、クラッシュが論理的かつ物理的に完全に防止されます。

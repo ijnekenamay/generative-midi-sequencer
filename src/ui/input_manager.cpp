@@ -100,7 +100,7 @@ bool InputManager::is_held(KeyIndex key) const {
 bool InputManager::is_long_pressed(KeyIndex key) const {
     if (key >= KEY_COUNT) return false;
     // Return true only once when the hold threshold is crossed
-    KeyState& k = const_cast<KeyState&>(keys[key]);
+    const KeyState& k = keys[key];
     if (k.current_state && k.press_duration_ms >= LONG_PRESS_THRESHOLD_MS && !k.long_pressed_fired) {
         k.long_pressed_fired = true;
         return true;

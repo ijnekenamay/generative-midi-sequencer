@@ -12,6 +12,8 @@ struct TrackParams {
     volatile uint8_t root_note;
     volatile uint8_t scale_type;
     volatile uint8_t clock_divide;
+    volatile uint8_t jitter;
+    volatile uint8_t gate;
     volatile bool is_muted;
 };
 
@@ -37,8 +39,17 @@ private:
     uint8_t root_note;      // MIDI root note (e.g. 36 = C1)
     ScaleType scale_type;   // Chromatic, Phrygian, etc.
     uint8_t clock_divide;   // Clock division factor (1, 2, 4, 8, etc.)
+    uint8_t jitter_rate;    // 0 to 100
+    uint8_t gate_rate;      // 10 to 100
     uint32_t clock_ticks;   // Master clock tick counter
     bool is_muted;
+
+    // Asynchronous note scheduling states for jitter and gate length control
+    uint64_t pending_note_on_time;
+    uint8_t pending_note;
+    bool has_pending_note;
+    uint64_t pending_note_off_time;
+    bool has_pending_note_off;
 
 public:
     Track(uint8_t id, uint8_t channel);
@@ -48,16 +59,23 @@ public:
     /**
      * Updates the track's parameters.
      */
-    void set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint8_t root, ScaleType scale, uint8_t divide, bool muted);
+    void set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint8_t root, ScaleType scale, uint8_t divide, uint8_t jit, uint8_t gt, bool muted);
 
     /**
      * Triggered on every master clock pulse (e.g. 24 ticks per quarter note).
      * 
      * @param master_tick Cumulative clock tick count.
+     * @param bpm The current BPM to calculate precise gate and jitter timings.
      * @param midi Reference to the MIDI transmitter.
      * @return true if a step trigger/note-on occurred on this tick.
      */
-    bool tick(uint32_t master_tick, MidiHandler& midi);
+    bool tick(uint32_t master_tick, uint32_t bpm, MidiHandler& midi);
+
+    /**
+     * Update loop to handle microtiming jitter and variable note-off gate lengths.
+     * Should be called continuously on Core 1's main loop.
+     */
+    void update_scheduled_events(uint32_t bpm, MidiHandler& midi);
 
     /**
      * Forcefully shuts off any currently playing MIDI note on this track.

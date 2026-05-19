@@ -21,7 +21,7 @@ struct KeyState {
     bool just_pressed;        // true only on the frame the button was pressed
     bool just_released;       // true only on the frame the button was released
     uint32_t press_duration_ms;// how long the key has been held down
-    bool long_pressed_fired;  // flags if the long press event was already dispatched
+    mutable bool long_pressed_fired;  // flags if the long press event was already dispatched
     
     // Debounce filter state
     uint8_t debounce_counter;

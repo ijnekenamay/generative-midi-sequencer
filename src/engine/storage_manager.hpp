@@ -4,9 +4,11 @@
 
 struct SaveData {
     uint32_t magic;          // 'SEQM' magic signature (0x5345514D)
-    TrackParams params[4];   // Parameters for all 4 tracks (28 bytes)
+    TrackParams params[4];   // Parameters for all 4 tracks
     uint32_t checksum;       // Simple additive checksum for validation
 };
+
+static_assert(sizeof(SaveData) <= 256, "SaveData exceeds one flash page size of 256 bytes");
 
 class StorageManager {
 private:
