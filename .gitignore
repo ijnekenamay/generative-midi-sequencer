@@ -1,0 +1,13 @@
+# CMake build directory
+build/
+
+# IDE and tool files
+.vscode/
+.idea/
+*.user
+*.suo
+*.local
+
+# OS generated files
+.DS_Store
+Thumbs.db

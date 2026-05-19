@@ -4,6 +4,7 @@
 #include "hardware/sync.h"
 #include "pico/multicore.h"
 #include <string.h>
+#include <cstdio>
 
 StorageManager::StorageManager() {
     // Constructor

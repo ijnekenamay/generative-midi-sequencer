@@ -85,7 +85,7 @@ bool i2s_timer_callback(struct repeating_timer *t) {
     
     // Push the raw sample directly into the PIO I2S SM0 TX FIFO
     if (!pio_sm_is_tx_fifo_full(pio0, 0)) {
-        pio_sm_put_raw(pio0, 0, sample);
+        pio_sm_put(pio0, 0, sample);
     }
     return true;
 }
@@ -141,6 +141,7 @@ DisplayController display;
 // Navigation States
 uint8_t cursor_track = 0; // 0 to 3
 uint8_t cursor_col = 0;   // 0 to 8 (SPD, LEN, DEN, SHF, MUT, JIT, GAT, ROT, SCL)
+volatile uint32_t cursor_move_time = 0;
 
 const char* column_headers[8] = {
     "LEN", "DEN", "SHF", "MUT", "JIT", "GAT", "ROT", "SCL"
@@ -196,6 +197,35 @@ void draw_bitmap(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t* 
     }
 }
 
+// L-shaped shooting focus corner markers helper
+void draw_corner_markers(uint16_t cell_x, uint16_t cell_y, uint16_t cell_w, uint16_t cell_h, float scale, uint16_t color) {
+    float cx = (float)cell_x + (float)cell_w / 2.0f;
+    float cy = (float)cell_y + (float)cell_h / 2.0f;
+    float off_x = ((float)cell_w / 2.0f + 2.0f) * scale;
+    float off_y = ((float)cell_h / 2.0f + 2.0f) * scale;
+
+    int16_t lx = (int16_t)(cx - off_x + 0.5f);
+    int16_t rx = (int16_t)(cx + off_x + 0.5f);
+    int16_t ly = (int16_t)(cy - off_y + 0.5f);
+    int16_t by = (int16_t)(cy + off_y + 0.5f);
+
+    // Top-Left corner marker
+    display.fill_rect(lx, ly, 4, 1, color);
+    display.fill_rect(lx, ly, 1, 4, color);
+
+    // Top-Right corner marker
+    display.fill_rect(rx - 3, ly, 4, 1, color);
+    display.fill_rect(rx, ly, 1, 4, color);
+
+    // Bottom-Left corner marker
+    display.fill_rect(lx, by, 4, 1, color);
+    display.fill_rect(lx, by - 3, 1, 4, color);
+
+    // Bottom-Right corner marker
+    display.fill_rect(rx - 3, by, 4, 1, color);
+    display.fill_rect(rx, by - 3, 1, 4, color);
+}
+
 // Render Helper
 void draw_ui_dashboard() {
     // Thread-safe parameters copying under spinlock to prevent torn reads during Core 0 drawing
@@ -205,6 +235,43 @@ void draw_ui_dashboard() {
         draw_params[i] = shared_params[i];
     }
     unlock_shared_params(lock_save);
+
+    // Compute cursor glitch / snap-in animation state variables
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    uint32_t elapsed = now - cursor_move_time;
+
+    bool glitch_active = false;
+    uint16_t glitch_bg = COLOR_BLACK;
+    int16_t glitch_x_offset = 0;
+    float marker_scale = 1.0f;
+    bool show_markers = false;
+
+    if (elapsed < 70) {
+        glitch_active = true;
+        glitch_bg = COLOR_MAGENTA;
+        glitch_x_offset = -3;
+    } else if (elapsed < 120) {
+        glitch_active = true;
+        glitch_bg = COLOR_CYAN;
+        glitch_x_offset = 2;
+    } else if (elapsed < 180) {
+        glitch_active = true;
+        glitch_bg = COLOR_MAGENTA;
+        glitch_x_offset = -1;
+    } else if (elapsed < 230) {
+        glitch_active = true;
+        glitch_bg = COLOR_CYAN;
+        glitch_x_offset = 0;
+    } else {
+        glitch_active = false;
+        show_markers = true;
+        if (elapsed < 350) {
+            float progress = (float)(elapsed - 230) / 120.0f;
+            marker_scale = 1.6f - 0.6f * progress;
+        } else {
+            marker_scale = 1.0f;
+        }
+    }
 
     // ----------------------------------------------------
     // 1. Draw Full-Width Header Area (Y: 0 to 48)
@@ -290,24 +357,47 @@ void draw_ui_dashboard() {
         else if (div == 48) sprintf(spd_str, "/2");
         else sprintf(spd_str, "/%d", div);
 
-        // Inversion logic for the speed multiplier
+        // Inversion/flash logic for the speed multiplier
         bool speed_selected = (cursor_track == trk && cursor_col == 0);
         bool trk_hit = shared_step_hit[trk] && !is_muted;
         
-        uint16_t spd_bg, spd_fg;
-        if (is_muted) {
-            spd_bg = speed_selected ? COLOR_GREY : COLOR_BLACK;
-            spd_fg = speed_selected ? COLOR_BLACK : COLOR_DARK_GREY;
+        uint16_t spd_bg = COLOR_BLACK;
+        uint16_t spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
+        int16_t spd_draw_x = 6;
+
+        if (speed_selected) {
+            if (glitch_active) {
+                spd_bg = glitch_bg;
+                spd_fg = COLOR_BLACK;
+                spd_draw_x = 6 + glitch_x_offset;
+            } else {
+                // Normal selection: trigger hit flashes white, otherwise black background
+                if (trk_hit) {
+                    spd_bg = COLOR_WHITE;
+                    spd_fg = COLOR_BLACK;
+                } else {
+                    spd_bg = COLOR_BLACK;
+                    spd_fg = is_muted ? COLOR_GREY : COLOR_WHITE;
+                }
+            }
         } else {
-            bool invert_draw = speed_selected ^ trk_hit; // Flashing inversion toggle
-            spd_bg = invert_draw ? COLOR_WHITE : COLOR_BLACK;
-            spd_fg = invert_draw ? COLOR_BLACK : COLOR_WHITE;
+            // Unselected: trigger hit flashes white, otherwise black background
+            if (trk_hit) {
+                spd_bg = COLOR_WHITE;
+                spd_fg = COLOR_BLACK;
+            } else {
+                spd_bg = COLOR_BLACK;
+                spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
+            }
         }
 
-        // Render Speed in Size 2 (Large) with dynamic inversion (only visible if NOT muted)
-        if (!is_muted) {
-            display.fill_rect(6, trk_y + 14, 32, 18, spd_bg);
-            display.draw_text(10, trk_y + 16, spd_str, spd_fg, spd_bg, 2);
+        // Render Speed in Size 2 (Large)
+        display.fill_rect(spd_draw_x, trk_y + 14, 32, 18, spd_bg);
+        display.draw_text(spd_draw_x + 4, trk_y + 16, spd_str, spd_fg, spd_bg, 2);
+
+        // Draw corner markers if speed cell is selected and glitch is done
+        if (speed_selected && show_markers) {
+            draw_corner_markers(6, trk_y + 14, 32, 18, marker_scale, COLOR_CYAN);
         }
 
         // Vertical boundary dividing Channel speed and parameter grid
@@ -319,22 +409,24 @@ void draw_ui_dashboard() {
             uint16_t cell_y = trk_y + 4;
 
             bool is_selected = (cursor_track == trk && cursor_col == col);
-            uint16_t bg, fg;
-            
-            if (is_muted) {
-                bg = is_selected ? COLOR_GREY : COLOR_BLACK;
-                fg = is_selected ? COLOR_BLACK : COLOR_DARK_GREY;
-            } else {
-                bg = is_selected ? COLOR_WHITE : COLOR_BLACK;
-                fg = is_selected ? COLOR_BLACK : COLOR_LIGHT_GREY;
+            uint16_t bg = COLOR_BLACK;
+            uint16_t fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
+            int16_t draw_x = cell_x;
+
+            if (is_selected) {
+                if (glitch_active) {
+                    bg = glitch_bg;
+                    fg = COLOR_BLACK;
+                    draw_x = (int16_t)cell_x + glitch_x_offset;
+                } else {
+                    bg = COLOR_BLACK;
+                    fg = is_muted ? COLOR_GREY : COLOR_WHITE;
+                }
             }
 
             // Draw parameter cell box (width 30, height 20)
-            display.fill_rect(cell_x, cell_y, 30, 20, bg);
-
-            if (!is_selected) {
-                display.draw_rect(cell_x, cell_y, 30, 20, COLOR_DARK_GREY);
-            }
+            display.fill_rect(draw_x, cell_y, 30, 20, bg);
+            display.draw_rect(draw_x, cell_y, 30, 20, COLOR_DARK_GREY);
 
             char val_str[6] = "";
             switch (col) {
@@ -347,8 +439,13 @@ void draw_ui_dashboard() {
                 case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
                 case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
             }
-            display.draw_text(cell_x + 5, cell_y + 6, val_str, fg, bg, 1);
+            display.draw_text(draw_x + 5, cell_y + 6, val_str, fg, bg, 1);
             
+            // Draw corner markers if selected and glitch is done
+            if (is_selected && show_markers) {
+                draw_corner_markers(cell_x, cell_y, 30, 20, marker_scale, COLOR_CYAN);
+            }
+
             // Draw column header label at the top of Channel 1 only
             if (trk == 0) {
                 display.draw_text(cell_x + 6, trk_y - 12, column_headers[col - 1], COLOR_GREY, COLOR_BLACK, 1);
@@ -509,6 +606,9 @@ int main() {
 
         bool value_changed = false;
 
+        uint8_t old_cursor_track = cursor_track;
+        uint8_t old_cursor_col = cursor_col;
+
         // Handle navigation D-pad
         if (input.is_pressed(KEY_UP)) {
             if (input.is_shift_active()) {
@@ -533,6 +633,11 @@ int main() {
         }
         if (input.is_pressed(KEY_RIGHT)) {
             if (cursor_col < 8) { cursor_col++; value_changed = true; }
+        }
+
+        if (cursor_track != old_cursor_track || cursor_col != old_cursor_col) {
+            cursor_move_time = to_ms_since_boot(get_absolute_time());
+            value_changed = true;
         }
 
         // Handle MUTE toggle (RT button toggles mute on currently selected track)
@@ -638,6 +743,11 @@ int main() {
             
             shared_params[cursor_track] = p;
             unlock_shared_params(lock_save);
+        }
+
+        // Keep redrawing during cursor movement animations for smooth 60fps glitch/snap-in playback
+        if (to_ms_since_boot(get_absolute_time()) - cursor_move_time < 350) {
+            force_redraw = true;
         }
 
         // Draw UI dashboard
