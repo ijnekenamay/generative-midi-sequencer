@@ -379,13 +379,13 @@ void draw_ui_dashboard() {
         // State 1: Playback State Capsule/Pill Container (OLED-style Neon Green pop when active)
         uint16_t pill_bg = screen_glitch_active ? screen_glitch_bg : (sequencer_playing ? 0x03E0 : COLOR_BLACK); 
         uint16_t pill_fg = screen_glitch_active ? COLOR_BLACK : (sequencer_playing ? COLOR_BLACK : COLOR_LIGHT_GREY);
-        display.fill_rect(98 + header_x_shift, 8, 48, 20, pill_bg);
+        display.fill_rect(96 + header_x_shift, 12, 58, 24, pill_bg);
         if (!screen_glitch_active && !sequencer_playing) {
-            display.draw_rect(98 + header_x_shift, 8, 48, 20, COLOR_DARK_GREY); // grey border
+            display.draw_rect(96 + header_x_shift, 12, 58, 24, COLOR_DARK_GREY); // grey border
         }
         
-        draw_bitmap(100 + header_x_shift, 10, 16, 16, icon_play_pause_16x16, pill_fg, pill_bg);
-        display.draw_text(118 + header_x_shift, 14, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
+        draw_bitmap(98 + header_x_shift, 16, 16, 16, icon_play_pause_16x16, pill_fg, pill_bg);
+        display.draw_text(118 + header_x_shift, 20, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
 
         // State 2: Active Track Scale Mode Capsule (Monochrome OLED)
         const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
@@ -393,18 +393,18 @@ void draw_ui_dashboard() {
         sprintf(scale_lbl, "SCL:%s", scale_names[current_scale_idx]);
         
         uint16_t scale_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK; 
-        display.fill_rect(154 + header_x_shift, 8, 80, 20, scale_bg);
+        display.fill_rect(162 + header_x_shift, 12, 112, 24, scale_bg);
         if (!screen_glitch_active) {
-            display.draw_rect(154 + header_x_shift, 8, 80, 20, COLOR_DARK_GREY); // Clean grey border
+            display.draw_rect(162 + header_x_shift, 12, 112, 24, COLOR_DARK_GREY); // Clean grey border
         }
         
-        draw_bitmap(156 + header_x_shift, 10, 16, 16, icon_note_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, scale_bg);
-        display.draw_text(174 + header_x_shift, 14, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE, scale_bg, 1);
+        draw_bitmap(168 + header_x_shift, 16, 16, 16, icon_note_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, scale_bg);
+        display.draw_text(188 + header_x_shift, 20, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE, scale_bg, 1);
 
         // State 3: Storage Safe Command Save Capsule using floppy disk (Icon-Only Mini-Capsule!)
         uint16_t disk_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
         uint8_t disk_y_offset = (disk_save_state > 0) ? 1 : 0; // slide down slightly on write!
-        display.fill_rect(284 + header_x_shift, 6, 30, 24, disk_bg);
+        display.fill_rect(284 + header_x_shift, 12, 30, 24, disk_bg);
         
         if (!screen_glitch_active) {
             // Flash border when writing or saved!
@@ -414,7 +414,7 @@ void draw_ui_dashboard() {
             } else if (disk_save_state == 3) {
                 current_disk_border = COLOR_CYAN;    // Glowing Cyan save success outline!
             }
-            display.draw_rect(284 + header_x_shift, 6, 30, 24, current_disk_border);
+            display.draw_rect(284 + header_x_shift, 12, 30, 24, current_disk_border);
         }
         
         uint16_t disk_icon_fg = COLOR_LIGHT_GREY;
@@ -424,17 +424,17 @@ void draw_ui_dashboard() {
             disk_icon_fg = COLOR_CYAN;
         }
         
-        draw_bitmap(291 + header_x_shift, 10 + disk_y_offset, 16, 16, icon_save_16x16, screen_glitch_active ? COLOR_BLACK : disk_icon_fg, disk_bg);
+        draw_bitmap(291 + header_x_shift, 16 + disk_y_offset, 16, 16, icon_save_16x16, screen_glitch_active ? COLOR_BLACK : disk_icon_fg, disk_bg);
 
         // Clean bottom divider line for full-width header
         display.fill_rect(0, 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
     }
 
     // ----------------------------------------------------
-    // 2. Draw 4 Track/Channel Strips (Y: 56 to 240, 46px each)
+    // 2. Draw 4 Track/Channel Strips (Y: 66 to 234, 42px each)
     // ----------------------------------------------------
     for (int trk = 0; trk < 4; ++trk) {
-        uint16_t trk_y = 56 + trk * 46;
+        uint16_t trk_y = 66 + trk * 42;
         bool is_muted = draw_params[trk].is_muted;
         bool is_active_track = (cursor_track == trk);
 
@@ -508,17 +508,16 @@ void draw_ui_dashboard() {
             }
         }
 
-        // Render Speed in Size 1 (Smart & balanced)
+        // Render Speed in Size 2 (Large bold geometric view - Maximum Left-Aligned!)
         display.fill_rect(spd_draw_x, trk_y + 14, 32, 18, spd_bg);
-        display.draw_text(spd_draw_x + 8, trk_y + 21, spd_str, spd_fg, spd_bg, 1);
+        display.draw_text(spd_draw_x, trk_y + 15, spd_str, spd_fg, spd_bg, 2);
 
         // Render pure monochrome cursor border if speed cell is active
         if (speed_selected) {
             display.draw_rect(spd_draw_x, trk_y + 14, 32, 18, cursor_color);
         }
 
-        // Vertical boundary dividing Channel speed and parameter grid
-        display.fill_rect(42 + row_x_shift, trk_y + 4, 1, 38, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
+        // Vertical boundary dividing Channel speed and parameter grid (Removed for pure borderless flat OLED look!)
 
         // B. Right Column: Expanded Parameter Grid Cells (Col 1 to 9 starts at X: 44)
         for (int col = 1; col <= 9; ++col) {
@@ -559,7 +558,7 @@ void draw_ui_dashboard() {
                 case 6: sprintf(val_str, "%02d", draw_params[trk].gate); break;
                 case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
                 case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
-                case 9: sprintf(val_str, "RND"); break;
+                case 9: sprintf(val_str, "RN"); break;
             }
 
             // High-Contrast Monochrome hierarchy with Faux-Bold highlights and sudden Neon Cyan pop
@@ -588,10 +587,11 @@ void draw_ui_dashboard() {
                 }
             }
 
-            // Render value with or without faux-bolding weight
-            display.draw_text(draw_x + (col == 9 ? 1 : 5), cell_y + 6, val_str, fg, bg, 1);
+            // Render value with or without faux-bolding weight (Precision Centering unified at X offset: 4)
+            uint8_t text_x_offset = 4;
+            display.draw_text(draw_x + text_x_offset, cell_y + 6, val_str, fg, bg, 1);
             if (is_bold && !screen_glitch_active) {
-                display.draw_text(draw_x + (col == 9 ? 1 : 5) + 1, cell_y + 6, val_str, fg, bg, 1); // Faux-bold overlay
+                display.draw_text(draw_x + text_x_offset + 1, cell_y + 6, val_str, fg, bg, 1); // Faux-bold overlay
             }
             
             // Simple border highlight already drawn in line 517
@@ -623,7 +623,7 @@ void draw_ui_dashboard() {
         }
 
         // C. Expanded Visual Step Playhead Strip (HD 3D-feeling sequencer track)
-        uint16_t steps_y = trk_y + 34;
+        uint16_t steps_y = trk_y + 32;
         display.fill_rect(44 + row_x_shift, steps_y, 266, 4, row_bg);
         
         // Draw slot track lane
