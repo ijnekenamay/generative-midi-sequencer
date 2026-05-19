@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <cmath>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/time.h"
@@ -274,8 +275,10 @@ void draw_ui_dashboard() {
             track_hit_env[i] = 1.0f;
             shared_step_hit[i] = false; // consume
         } else {
-            track_hit_env[i] -= (float)dt * 0.008f; // fast decay (~125ms)
-            if (track_hit_env[i] < 0.0f) track_hit_env[i] = 0.0f;
+            // Buttery-smooth exponential decay (~125ms half-life scaled by dt!)
+            float decay = powf(0.80f, (float)dt / 16.0f);
+            track_hit_env[i] *= decay;
+            if (track_hit_env[i] < 0.01f) track_hit_env[i] = 0.0f;
         }
 
         // Read and consume mutation flags from multicore
@@ -283,8 +286,10 @@ void draw_ui_dashboard() {
             track_mut_env[i] = 1.0f;
             shared_track_mutated[i] = false; // consume
         } else {
-            track_mut_env[i] -= (float)dt * 0.005f; // slower decay (~200ms)
-            if (track_mut_env[i] < 0.0f) track_mut_env[i] = 0.0f;
+            // Slower buttery-smooth exponential decay (~200ms half-life!)
+            float decay = powf(0.88f, (float)dt / 16.0f);
+            track_mut_env[i] *= decay;
+            if (track_mut_env[i] < 0.01f) track_mut_env[i] = 0.0f;
         }
     }
 
@@ -305,14 +310,23 @@ void draw_ui_dashboard() {
     for (int i = 0; i < 4; ++i) {
         density_sum += draw_params[i].density;
     }
-    float engine_load = (density_sum / 64.0f) * 60.0f + 15.0f + (get_rand_32() % 8);
+    
+    // Slewing / Interpolation (1-pole low pass filter) for buttery smooth CPU scope needles!
+    static float filtered_engine_load = 15.0f;
+    static float filtered_ui_load = 22.0f;
+
+    float target_engine = (density_sum / 64.0f) * 60.0f + 15.0f + (get_rand_32() % 6);
+    float target_ui = 20.0f + (get_rand_32() % 10);
+
+    filtered_engine_load += (target_engine - filtered_engine_load) * 0.15f;
+    filtered_ui_load += (target_ui - filtered_ui_load) * 0.15f;
+
+    float engine_load = filtered_engine_load;
     if (engine_load > 95.0f) engine_load = 95.0f;
 
-    static float prev_ui_load = 22.0f;
-    float ui_load = prev_ui_load + ((get_rand_32() % 5) - 2);
+    float ui_load = filtered_ui_load;
     if (ui_load < 15.0f) ui_load = 15.0f;
     if (ui_load > 45.0f) ui_load = 45.0f;
-    prev_ui_load = ui_load;
 
     bool glitch_active = false;
     uint16_t glitch_bg = COLOR_BLACK;
@@ -341,16 +355,19 @@ void draw_ui_dashboard() {
         show_markers = true;
         if (elapsed < 350) {
             float progress = (float)(elapsed - 230) / 120.0f;
-            marker_scale = 1.6f - 0.6f * progress;
+            // Buttery-smooth cubic ease-out!
+            float eased = 1.0f - (1.0f - progress) * (1.0f - progress) * (1.0f - progress);
+            marker_scale = 1.6f - 0.6f * eased;
         } else {
             marker_scale = 1.0f;
         }
     }
 
-    // Apply Elastic Value Pop scaling factor
+    // Apply Elastic Value Pop scaling factor (Organic Damped Cosine Spring Bounce!)
     if (elastic_anim_timer > 0) {
-        float elastic_progress = (float)elastic_anim_timer / 150.0f;
-        marker_scale += 0.35f * elastic_progress;
+        float pop_progress = 1.0f - ((float)elastic_anim_timer / 150.0f); // 0.0 when popped, 1.0 when settled
+        float spring = 0.4f * cosf(pop_progress * 3.14159f * 2.5f) * (1.0f - pop_progress) * (1.0f - pop_progress);
+        marker_scale += spring;
         show_markers = true; // force corner markers visibility during value change
     }
 
