@@ -355,6 +355,79 @@ void draw_ui_dashboard() {
     }
 }
 
+// Core 1 Entry Point (Realtime MIDI and Generative Engine)
+void core1_entry() {
+    // 1. Initialize hardware UART0 MIDI OUT
+    midi.init();
+    
+    // 2. Initialize and configure the I2S state machine on PIO0 for the analog clock sync trigger output
+    init_pio_i2s();
+    
+    // 3. Start a repeating timer on Core 1 for the I2S clock pulse generation (22.05 kHz stereo stream)
+    // pico timer with negative interval schedules execution relative to the start of the last callback, maintaining precise frequency
+    add_repeating_timer_us(-45, i2s_timer_callback, NULL, &i2s_timer);
+    
+    // 4. Set initial parameters from shared memory
+    for (int i = 0; i < 4; ++i) {
+        tracks[i].set_params(
+            shared_params[i].length,
+            shared_params[i].density,
+            shared_params[i].shift,
+            shared_params[i].mutation,
+            shared_params[i].root_note,
+            (ScaleType)shared_params[i].scale_type,
+            shared_params[i].clock_divide,
+            shared_params[i].is_muted
+        );
+    }
+    
+    // Master clock loop running at 120 BPM driving 24 PPQN MIDI clocks (20.83ms intervals)
+    // Using a precise microsecond sleep timer based on the RP2040 system clock
+    uint32_t target_tick_us = (60 * 1000000) / (120 * 24); // 20833 microseconds per tick (at 120 BPM)
+    uint64_t next_tick_time = time_us_64() + target_tick_us;
+    
+    while (true) {
+        if (sequencer_playing) {
+            uint64_t now = time_us_64();
+            if (now >= next_tick_time) {
+                // A. Send standard serial MIDI clock tick over UART0 TX (GP0)
+                midi.send_clock();
+                
+                // B. Trigger a physical 5ms analog clock sync pulse via I2S DAC (GP26 Data, GP21 BCLK, GP22 LRCK)
+                // 110 samples at 22.05 kHz sample rate yields exactly a 5.0ms high-amplitude square wave pulse
+                clock_pulse_remaining_samples = 110;
+                
+                // C. Tick all 4 tracks to advance their playheads and generate generative MIDI notes
+                for (int i = 0; i < 4; ++i) {
+                    // Update track parameters live from Core 0 shared memory
+                    tracks[i].set_params(
+                        shared_params[i].length,
+                        shared_params[i].density,
+                        shared_params[i].shift,
+                        shared_params[i].mutation,
+                        shared_params[i].root_note,
+                        (ScaleType)shared_params[i].scale_type,
+                        shared_params[i].clock_divide,
+                        shared_params[i].is_muted
+                    );
+                    
+                    // Tick the track and capture if a note was fired
+                    bool hit = tracks[i].tick(shared_master_ticks, midi);
+                    
+                    // Share playhead/hit indicators back to Core 0 UI thread using volatile memory
+                    shared_current_step[i] = tracks[i].get_current_step();
+                    shared_step_hit[i] = hit;
+                }
+                
+                shared_master_ticks++;
+                next_tick_time += target_tick_us;
+            }
+        }
+        
+        tight_loop_contents();
+    }
+}
+
 int main() {
     stdio_init_all();
     sleep_ms(2000); // Settling delay for USB debug terminal

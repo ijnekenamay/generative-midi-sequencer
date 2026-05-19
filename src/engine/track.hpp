@@ -55,11 +55,17 @@ public:
      * 
      * @param master_tick Cumulative clock tick count.
      * @param midi Reference to the MIDI transmitter.
+     * @return true if a step trigger/note-on occurred on this tick.
      */
-    void tick(uint32_t master_tick, MidiHandler& midi);
+    bool tick(uint32_t master_tick, MidiHandler& midi);
 
     /**
      * Forcefully shuts off any currently playing MIDI note on this track.
      */
     void silence(MidiHandler& midi);
+
+    /**
+     * Returns the current playhead step index.
+     */
+    uint8_t get_current_step() const { return current_step; }
 };

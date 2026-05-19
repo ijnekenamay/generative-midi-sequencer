@@ -33,7 +33,7 @@ void Track::set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint
     is_muted = muted;
 }
 
-void Track::tick(uint32_t master_tick, MidiHandler& midi) {
+bool Track::tick(uint32_t master_tick, MidiHandler& midi) {
     // Only step the sequencer when the master tick aligns with this track's divisor
     if (master_tick % clock_divide == 0) {
         // 1. Turn off previous note before stepping (mono-legato style for techno)
@@ -42,7 +42,7 @@ void Track::tick(uint32_t master_tick, MidiHandler& midi) {
         if (is_muted) {
             // Keep playhead moving for visual feedback, but block note execution
             current_step = (current_step + 1) % length;
-            return;
+            return false;
         }
         
         // 2. Calculate if the current step is a Euclidean hit
@@ -64,7 +64,9 @@ void Track::tick(uint32_t master_tick, MidiHandler& midi) {
         
         // 3. Advance to the next step
         current_step = (current_step + 1) % length;
+        return triggered;
     }
+    return false;
 }
 
 void Track::silence(MidiHandler& midi) {
