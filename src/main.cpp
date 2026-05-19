@@ -306,10 +306,13 @@ void draw_ui_dashboard() {
 
     display.fill_rect(0, 0, 320, 48, header_bg);
     
-    // Vertical BPM Label
+    // Vertical BPM Label (Vaporwave Faux-Bold!)
     display.draw_text(8 + header_x_shift, 6, "B", header_lbl_color, header_bg, 1);
+    display.draw_text(8 + header_x_shift + 1, 6, "B", header_lbl_color, header_bg, 1);
     display.draw_text(8 + header_x_shift, 16, "P", header_lbl_color, header_bg, 1);
+    display.draw_text(8 + header_x_shift + 1, 16, "P", header_lbl_color, header_bg, 1);
     display.draw_text(8 + header_x_shift, 26, "M", header_lbl_color, header_bg, 1);
+    display.draw_text(8 + header_x_shift + 1, 26, "M", header_lbl_color, header_bg, 1);
 
     // Master Clock Flashing Check
     bool master_flash = sequencer_playing && ((shared_master_ticks / 12) % 2 == 0);
@@ -331,24 +334,45 @@ void draw_ui_dashboard() {
     // Vertical Separator
     display.fill_rect(112 + header_x_shift, 6, 1, 36, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
 
-    // State 1: Playback State Icon & Text
-    draw_bitmap(124 + header_x_shift, 12, 8, 8, sequencer_playing ? icon_play : icon_stop, header_fg, header_bg);
-    display.draw_text(138 + header_x_shift, 12, sequencer_playing ? "RUN" : "STOP", 
-                      sequencer_playing ? header_fg : (screen_glitch_active ? COLOR_BLACK : COLOR_GREY), header_bg, 1);
+    // State 1: Playback State Capsule/Pill Container (OLED-style Neon Green pop when active)
+    uint16_t pill_bg = screen_glitch_active ? screen_glitch_bg : (sequencer_playing ? 0x03E0 : COLOR_BLACK); 
+    uint16_t pill_fg = screen_glitch_active ? COLOR_BLACK : (sequencer_playing ? COLOR_BLACK : COLOR_LIGHT_GREY);
+    display.fill_rect(120 + header_x_shift, 10, 48, 16, pill_bg);
+    if (!screen_glitch_active && !sequencer_playing) {
+        display.draw_rect(120 + header_x_shift, 10, 48, 16, COLOR_DARK_GREY); // grey border
+    }
+    
+    draw_bitmap(124 + header_x_shift, 14, 8, 8, sequencer_playing ? icon_play : icon_stop, pill_fg, pill_bg);
+    display.draw_text(136 + header_x_shift, 14, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
 
-    // State 2: Active Track Scale Mode
-    draw_bitmap(180 + header_x_shift, 12, 8, 8, icon_note, header_fg, header_bg);
-    char scale_lbl[8];
-    sprintf(scale_lbl, "SCL:S%d", draw_params[cursor_track].scale_type + 1);
-    display.draw_text(194 + header_x_shift, 12, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, header_bg, 1);
+    // State 2: Active Track Scale Mode Capsule (Monochrome OLED)
+    const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
+    uint8_t current_scale_idx = draw_params[cursor_track].scale_type;
+    if (current_scale_idx >= 5) current_scale_idx = 0;
+    char scale_lbl[16];
+    sprintf(scale_lbl, "SCL:%s", scale_names[current_scale_idx]);
+    
+    uint16_t scale_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK; 
+    display.fill_rect(176 + header_x_shift, 10, 62, 16, scale_bg);
+    if (!screen_glitch_active) {
+        display.draw_rect(176 + header_x_shift, 10, 62, 16, COLOR_DARK_GREY); // Clean grey border
+    }
+    
+    draw_bitmap(180 + header_x_shift, 14, 8, 8, icon_note, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, scale_bg);
+    display.draw_text(192 + header_x_shift, 14, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE, scale_bg, 1);
 
-    // State 3: Storage Safe Command Save using the high-definition 16x16 floppy disk icon
-    draw_bitmap(248 + header_x_shift, 8, 16, 16, icon_save_16x16, header_fg, header_bg);
-    display.draw_text(268 + header_x_shift, 8, "DISK", screen_glitch_active ? COLOR_BLACK : COLOR_GREY, header_bg, 1);
-    display.draw_text(268 + header_x_shift, 18, "LT+PLY", header_sub_color, header_bg, 1);
+    // State 3: Storage Safe Command Save Capsule using floppy disk (Monochrome OLED)
+    uint16_t disk_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
+    display.fill_rect(244 + header_x_shift, 6, 70, 24, disk_bg);
+    if (!screen_glitch_active) {
+        display.draw_rect(244 + header_x_shift, 6, 70, 24, COLOR_DARK_GREY); // Clean grey border
+    }
+    draw_bitmap(248 + header_x_shift, 10, 16, 16, icon_save_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, disk_bg);
+    display.draw_text(268 + header_x_shift, 10, "DISK", screen_glitch_active ? COLOR_BLACK : COLOR_GREY, disk_bg, 1);
+    display.draw_text(268 + header_x_shift, 19, "LT+PLY", header_sub_color, disk_bg, 1);
 
     // Clean bottom divider line for full-width header
-    display.fill_rect(0, 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE);
+    display.fill_rect(0, 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
 
     // ----------------------------------------------------
     // 2. Draw 4 Track/Channel Strips (Y: 48 to 240, 48px each)
@@ -356,23 +380,32 @@ void draw_ui_dashboard() {
     for (int trk = 0; trk < 4; ++trk) {
         uint16_t trk_y = 48 + trk * 48;
         bool is_muted = draw_params[trk].is_muted;
+        bool is_active_track = (cursor_track == trk);
 
         int16_t row_x_shift = screen_glitch_active ? screen_glitch_x_offset : 0;
+        uint16_t track_bg = COLOR_BLACK; // pure OLED black contrast!
         uint16_t row_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
 
         // Bottom divider for each row
         display.fill_rect(0, trk_y + 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
 
-        // A. Left Column: CH ID (MUT if muted), Speed Indicator (flashes via black/white inversion!)
-        char ch_lbl[8];
-        sprintf(ch_lbl, is_muted ? "MUT%d" : "CH%d", trk + 1);
+        // Elektron-style Horizontal Framed highlights for active track row
+        if (is_active_track && !screen_glitch_active) {
+            display.fill_rect(0, trk_y + 3, 320, 1, COLOR_GREY);   // top framing line
+            display.fill_rect(0, trk_y + 45, 320, 1, COLOR_GREY);  // bottom framing line
+        }
+
+        // A. Left Column: CH ID and Speed Indicator (Large bold Elektron OLED track digit!)
+        display.draw_text(6 + row_x_shift, trk_y + 4, is_muted ? "MUT" : "CH", screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_GREY), track_bg, 1);
         
-        uint16_t ch_color = screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_GREY);
-        display.draw_text(6 + row_x_shift, trk_y + 4, ch_lbl, ch_color, row_bg, 1);
+        char trk_num_str[2] = { (char)('1' + trk), '\0' };
+        uint16_t trk_num_color = screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_WHITE);
+        display.draw_text(20 + row_x_shift, trk_y + 2, trk_num_str, trk_num_color, track_bg, 2);
+        display.draw_text(20 + row_x_shift + 1, trk_y + 2, trk_num_str, trk_num_color, track_bg, 2); // faux bold
 
         if (is_muted) {
             // Draw Speaker Mute 16x16 icon in place of speed or next to it
-            draw_bitmap(24 + row_x_shift, trk_y + 14, 16, 16, icon_mute_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY, row_bg);
+            draw_bitmap(24 + row_x_shift, trk_y + 14, 16, 16, icon_mute_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY, track_bg);
         }
 
         // Format Clock Divide into speed multiplication factor (large bold size 2)
@@ -391,7 +424,7 @@ void draw_ui_dashboard() {
         bool speed_selected = (cursor_track == trk && cursor_col == 0);
         bool trk_hit = shared_step_hit[trk] && !is_muted;
         
-        uint16_t spd_bg = COLOR_BLACK;
+        uint16_t spd_bg = track_bg;
         uint16_t spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
         int16_t spd_draw_x = 6 + row_x_shift;
 
@@ -414,12 +447,12 @@ void draw_ui_dashboard() {
                 }
             }
         } else {
-            // Unselected: trigger hit flashes white, otherwise black background
+            // Unselected: trigger hit flashes white, otherwise standard track background
             if (trk_hit) {
                 spd_bg = COLOR_WHITE;
                 spd_fg = COLOR_BLACK;
             } else {
-                spd_bg = COLOR_BLACK;
+                spd_bg = track_bg;
                 spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
             }
         }
@@ -442,8 +475,9 @@ void draw_ui_dashboard() {
             uint16_t cell_y = trk_y + 4;
 
             bool is_selected = (cursor_track == trk && cursor_col == col);
-            uint16_t bg = COLOR_BLACK;
+            uint16_t bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK; // pure OLED black cell background!
             uint16_t fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
+            uint16_t border_color = screen_glitch_active ? COLOR_BLACK : (is_selected ? COLOR_CYAN : COLOR_DARK_GREY);
             int16_t draw_x = cell_x + row_x_shift;
 
             if (screen_glitch_active) {
@@ -460,9 +494,9 @@ void draw_ui_dashboard() {
                 }
             }
 
-            // Draw parameter cell box (width 26, height 20)
+            // Draw parameter cell box (width 26, height 20) with clean monochrome borders
             display.fill_rect(draw_x, cell_y, 26, 20, bg);
-            display.draw_rect(draw_x, cell_y, 26, 20, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
+            display.draw_rect(draw_x, cell_y, 26, 20, border_color);
 
             char val_str[6] = "";
             switch (col) {
@@ -477,12 +511,37 @@ void draw_ui_dashboard() {
                 case 9: sprintf(val_str, "RND"); break;
             }
 
-            // For column 9 RND button, let's draw it in Cyan for awesome visual premium identity!
-            if (col == 9 && !screen_glitch_active && !is_selected) {
-                fg = COLOR_CYAN;
+            // High-Contrast Monochrome hierarchy with Faux-Bold highlights and sudden Neon Cyan pop
+            bool is_bold = false;
+            if (screen_glitch_active) {
+                fg = COLOR_BLACK;
+            } else if (is_selected) {
+                fg = is_muted ? COLOR_GREY : COLOR_WHITE;
+                is_bold = true; // Focused cell value is always bold white!
+            } else {
+                switch (col) {
+                    case 1: // LEN (High importance)
+                    case 2: // DEN (High importance)
+                    case 4: // MUT (High importance)
+                        fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE; // Bold stark white!
+                        is_bold = true;
+                        break;
+                    case 9: // RND (Sudden performative neon pop!)
+                        fg = COLOR_CYAN; // Blazing Neon Cyan!
+                        is_bold = true;
+                        break;
+                    default: // SHF, JIT, GAT, ROT, SCL (Secondary modifiers in monochrome grays)
+                        fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
+                        is_bold = false;
+                        break;
+                }
             }
 
+            // Render value with or without faux-bolding weight
             display.draw_text(draw_x + (col == 9 ? 4 : 5), cell_y + 6, val_str, fg, bg, 1);
+            if (is_bold && !screen_glitch_active) {
+                display.draw_text(draw_x + (col == 9 ? 4 : 5) + 1, cell_y + 6, val_str, fg, bg, 1); // Faux-bold overlay
+            }
             
             // Draw corner markers if selected and glitch is done
             if (is_selected && show_markers && !screen_glitch_active) {
@@ -515,9 +574,14 @@ void draw_ui_dashboard() {
             }
         }
 
-        // C. Expanded Visual Step Playhead Strip
+        // C. Expanded Visual Step Playhead Strip (HD 3D-feeling sequencer track)
         uint16_t steps_y = trk_y + 34;
         display.fill_rect(44 + row_x_shift, steps_y, 266, 4, row_bg);
+        
+        // Draw slot track lane
+        if (!screen_glitch_active) {
+            display.fill_rect(44 + row_x_shift, steps_y + 1, 266, 2, COLOR_DARK_GREY); // monochrome OLED slot lane
+        }
 
         uint8_t len = draw_params[trk].length;
         uint8_t curr = shared_current_step[trk];
@@ -535,7 +599,15 @@ void draw_ui_dashboard() {
             } else {
                 sc = (s == curr) ? (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY) : COLOR_DARK_GREY;
             }
-            display.fill_rect(sx, steps_y, step_w - 1, 2, sc);
+            
+            // Render active steps as 3D taller blocks to create dynamic feel
+            uint16_t sh = 2; // step height
+            uint16_t sy = steps_y + 1;
+            if (s == curr && !screen_glitch_active) {
+                sh = 4; // active step block pops up!
+                sy = steps_y;
+            }
+            display.fill_rect(sx, sy, step_w - 1, sh, sc);
         }
     }
 }
@@ -646,6 +718,17 @@ int main() {
     printf("[Core 0] Initializing Peripherals...\n");
     input.init();
     display.init();
+    display.clear(COLOR_BLACK);
+
+    // Premium Elektron-style Boot Splash Sequence
+    draw_bitmap(144, 70, 32, 32, icon_splash_logo_32x32, COLOR_WHITE, COLOR_BLACK);
+    display.draw_text(96, 120, "GEN-MIDI", COLOR_WHITE, COLOR_BLACK, 2);
+    display.draw_text(97, 120, "GEN-MIDI", COLOR_WHITE, COLOR_BLACK, 2); // Faux-bold overlay
+    display.draw_text(136, 145, "V1.0.0", COLOR_GREY, COLOR_BLACK, 1);
+    display.draw_text(72, 175, "INITIALIZING ENGINE...", COLOR_DARK_GREY, COLOR_BLACK, 1);
+    
+    // Premium boot delay for player anticipation
+    sleep_ms(1500);
     display.clear(COLOR_BLACK);
 
     // Initialize the spinlock for safe parameter copies between Core 0 and Core 1
