@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <cmath>
+#include <functional>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/time.h"
@@ -38,6 +39,7 @@ TrackParams shared_params[4] = {
 // Core 1 to Core 0 feedback (for visual step indicator)
 volatile uint8_t shared_current_step[4] = {0, 0, 0, 0};
 volatile bool shared_step_hit[4] = {false, false, false, false};
+volatile bool shared_track_mutated[4] = {false, false, false, false};
 volatile bool sequencer_playing = true;
 volatile uint16_t shared_bpm = 120;
 volatile uint32_t shared_master_ticks = 0; // Share tick counter for beat synchronization
@@ -144,48 +146,115 @@ DisplayController display;
 uint8_t cursor_track = 0; // 0 to 3
 uint8_t cursor_col = 0;   // 0 to 9 (SPD, LEN, DEN, SHF, MUT, JIT, GAT, ROT, SCL, RND)
 volatile uint32_t cursor_move_time = 0;
-volatile uint32_t screen_glitch_time = 0; // Trigger for screen-wide analog glitch flash
+volatile bool force_redraw = true;       // Global UI force redraw flag
 
-// --- Premium Interactive UX State Variables ---
-volatile int32_t elastic_anim_timer = 0; // Elastic pop effect for cursor corner markers
-float track_hit_env[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // Real-time peak envelope for steps hit (envelope decay)
-volatile bool shared_track_mutated[4] = {false, false, false, false}; // Multi-core mutation indicator
-float track_mut_env[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // Decaying mutation visualization envelope
+// --- Interactive Control State Variables (Cleaned) ---
 int disk_save_state = 0; // 0: Idle, 1: Writing, 2: Perform Flash Save, 3: Success flashing
-int32_t disk_save_timer = 0; // Duration for floppy disk save state animation
 
-// --- Custom 8x8 Pixel Art Bitmaps ---
-const uint8_t icon_play[8] = {
-    0b00000000,
-    0b01000000,
-    0b01100000,
-    0b01110000,
-    0b01111000,
-    0b01110000,
-    0b01100000,
-    0b01000000
+// --- Custom 32x32 High-Definition Pixel Art Bitmaps ---
+const uint8_t icon_play_32x32[128] = {
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x0C, 0x00, 0x00,
+    0x00, 0x1C, 0x00, 0x00,
+    0x00, 0x3C, 0x00, 0x00,
+    0x00, 0x7C, 0x00, 0x00,
+    0x00, 0xFC, 0x00, 0x00,
+    0x01, 0xFC, 0x00, 0x00,
+    0x03, 0xFC, 0x00, 0x00,
+    0x07, 0xFC, 0x00, 0x00,
+    0x0F, 0xFC, 0x00, 0x00,
+    0x1F, 0xFC, 0x00, 0x00,
+    0x3F, 0xFC, 0x00, 0x00,
+    0x7F, 0xFC, 0x00, 0x00,
+    0xFF, 0xFC, 0x00, 0x00,
+    0xFF, 0xFC, 0x00, 0x00,
+    0xFF, 0xFC, 0x00, 0x00,
+    0xFF, 0xFC, 0x00, 0x00,
+    0x7F, 0xFC, 0x00, 0x00,
+    0x3F, 0xFC, 0x00, 0x00,
+    0x1F, 0xFC, 0x00, 0x00,
+    0x0F, 0xFC, 0x00, 0x00,
+    0x07, 0xFC, 0x00, 0x00,
+    0x03, 0xFC, 0x00, 0x00,
+    0x01, 0xFC, 0x00, 0x00,
+    0x00, 0xFC, 0x00, 0x00,
+    0x00, 0x7C, 0x00, 0x00,
+    0x00, 0x3C, 0x00, 0x00,
+    0x00, 0x1C, 0x00, 0x00,
+    0x00, 0x0C, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00
 };
 
-const uint8_t icon_stop[8] = {
-    0b00000000,
-    0b01101100,
-    0b01101100,
-    0b01101100,
-    0b01101100,
-    0b01101100,
-    0b01101100,
-    0b00000000
+const uint8_t icon_stop_32x32[128] = {
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0xFF, 0xFF, 0x00,
+    0x00, 0xFF, 0xFF, 0x00,
+    0x01, 0xFF, 0xFF, 0x80,
+    0x03, 0xFF, 0xFF, 0xC0,
+    0x07, 0xFF, 0xFF, 0xE0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x0F, 0xFF, 0xFF, 0xF0,
+    0x07, 0xFF, 0xFF, 0xE0,
+    0x03, 0xFF, 0xFF, 0xC0,
+    0x01, 0xFF, 0xFF, 0x80,
+    0x00, 0xFF, 0xFF, 0x00,
+    0x00, 0xFF, 0xFF, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00
 };
 
-const uint8_t icon_note[8] = {
-    0b00001100,
-    0b00001110,
-    0b00001011,
-    0b00001001,
-    0b00001000,
-    0b00111000,
-    0b01111000,
-    0b00110000
+const uint8_t icon_note_32x32[128] = {
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x03, 0xFF,
+    0x00, 0x00, 0x03, 0xFF,
+    0x00, 0x00, 0x03, 0xFF,
+    0x00, 0x00, 0x03, 0xCD,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x00, 0x03, 0xC8,
+    0x00, 0x03, 0x83, 0xC8,
+    0x00, 0x07, 0xC3, 0xC8,
+    0x00, 0x0F, 0xE3, 0xC8,
+    0x00, 0x1F, 0xE3, 0xC8,
+    0x00, 0x1F, 0xE3, 0xC8,
+    0x00, 0x0F, 0xC3, 0xC0,
+    0x00, 0x00, 0x03, 0xC0,
+    0x03, 0x80, 0x00, 0x00,
+    0x07, 0xC0, 0x00, 0x00,
+    0x0F, 0xE0, 0x00, 0x00,
+    0x1F, 0xE0, 0x00, 0x00,
+    0x1F, 0xE0, 0x00, 0x00,
+    0x0F, 0xC0, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00
 };
 
 // Universal bitmap drawing helper (renders 1-bit raw glyphs of ANY width and height!)
@@ -204,35 +273,6 @@ void draw_bitmap(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t* 
     }
 }
 
-// L-shaped shooting focus corner markers helper
-void draw_corner_markers(uint16_t cell_x, uint16_t cell_y, uint16_t cell_w, uint16_t cell_h, float scale, uint16_t color) {
-    float cx = (float)cell_x + (float)cell_w / 2.0f;
-    float cy = (float)cell_y + (float)cell_h / 2.0f;
-    float off_x = ((float)cell_w / 2.0f + 2.0f) * scale;
-    float off_y = ((float)cell_h / 2.0f + 2.0f) * scale;
-
-    int16_t lx = (int16_t)(cx - off_x + 0.5f);
-    int16_t rx = (int16_t)(cx + off_x + 0.5f);
-    int16_t ly = (int16_t)(cy - off_y + 0.5f);
-    int16_t by = (int16_t)(cy + off_y + 0.5f);
-
-    // Top-Left corner marker
-    display.fill_rect(lx, ly, 4, 1, color);
-    display.fill_rect(lx, ly, 1, 4, color);
-
-    // Top-Right corner marker
-    display.fill_rect(rx - 3, ly, 4, 1, color);
-    display.fill_rect(rx, ly, 1, 4, color);
-
-    // Bottom-Left corner marker
-    display.fill_rect(lx, by, 4, 1, color);
-    display.fill_rect(lx, by - 3, 1, 4, color);
-
-    // Bottom-Right corner marker
-    display.fill_rect(rx - 3, by, 4, 1, color);
-    display.fill_rect(rx, by - 3, 1, 4, color);
-}
-
 // Render Helper
 void draw_ui_dashboard() {
     // Thread-safe parameters copying under spinlock to prevent torn reads during Core 0 drawing
@@ -244,156 +284,21 @@ void draw_ui_dashboard() {
     unlock_shared_params(lock_save);
 
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    uint32_t elapsed = now - cursor_move_time;
-
-    // Compute dynamic interactive color-to-monochrome cursor fade (Cyan -> White over 5s)
     uint16_t cursor_color = COLOR_CYAN;
-    if (elapsed > 1000) {
-        if (elapsed >= 5000) {
-            cursor_color = COLOR_WHITE;
-        } else {
-            float cyan_factor = 1.0f - (float)(elapsed - 1000) / 4000.0f;
-            uint8_t red = (uint8_t)(31.0f * (1.0f - cyan_factor));
-            cursor_color = (red << 11) | (63 << 5) | 31;
-        }
-    }
 
-    // Real-time visual decay engine (ticks, mutations, disks, elastic timers)
-    static uint32_t last_draw_time = 0;
-    uint32_t dt = now - last_draw_time;
-    if (dt > 100) dt = 16; // clamp first run or spikes
-    last_draw_time = now;
-
-    if (elastic_anim_timer > 0) {
-        elastic_anim_timer -= dt;
-        if (elastic_anim_timer < 0) elastic_anim_timer = 0;
-    }
-
-    for (int i = 0; i < 4; ++i) {
-        // Read and consume step hit flags from multicore
-        if (shared_step_hit[i]) {
-            track_hit_env[i] = 1.0f;
-            shared_step_hit[i] = false; // consume
-        } else {
-            // Buttery-smooth exponential decay (~125ms half-life scaled by dt!)
-            float decay = powf(0.80f, (float)dt / 16.0f);
-            track_hit_env[i] *= decay;
-            if (track_hit_env[i] < 0.01f) track_hit_env[i] = 0.0f;
-        }
-
-        // Read and consume mutation flags from multicore
-        if (shared_track_mutated[i]) {
-            track_mut_env[i] = 1.0f;
-            shared_track_mutated[i] = false; // consume
-        } else {
-            // Slower buttery-smooth exponential decay (~200ms half-life!)
-            float decay = powf(0.88f, (float)dt / 16.0f);
-            track_mut_env[i] *= decay;
-            if (track_mut_env[i] < 0.01f) track_mut_env[i] = 0.0f;
-        }
-    }
-
-    if (disk_save_state == 1) {
-        disk_save_timer -= dt;
-        if (disk_save_timer <= 0) {
-            disk_save_state = 2; // proceed to actual flash write next loop
-        }
-    } else if (disk_save_state == 3) {
-        disk_save_timer -= dt;
-        if (disk_save_timer <= 0) {
-            disk_save_state = 0; // return to idle
-        }
-    }
-
-    // Calculate highly authentic real-time CPU engine load representation
-    float density_sum = 0;
-    for (int i = 0; i < 4; ++i) {
-        density_sum += draw_params[i].density;
-    }
-    
-    // Slewing / Interpolation (1-pole low pass filter) for buttery smooth CPU scope needles!
-    static float filtered_engine_load = 15.0f;
-    static float filtered_ui_load = 22.0f;
-
-    float target_engine = (density_sum / 64.0f) * 60.0f + 15.0f + (get_rand_32() % 6);
-    float target_ui = 20.0f + (get_rand_32() % 10);
-
-    filtered_engine_load += (target_engine - filtered_engine_load) * 0.15f;
-    filtered_ui_load += (target_ui - filtered_ui_load) * 0.15f;
-
-    float engine_load = filtered_engine_load;
-    if (engine_load > 95.0f) engine_load = 95.0f;
-
-    float ui_load = filtered_ui_load;
-    if (ui_load < 15.0f) ui_load = 15.0f;
-    if (ui_load > 45.0f) ui_load = 45.0f;
+    // Static clean system loads
+    float engine_load = 18.0f;
+    float ui_load = 22.0f;
 
     bool glitch_active = false;
     uint16_t glitch_bg = COLOR_BLACK;
     int16_t glitch_x_offset = 0;
     float marker_scale = 1.0f;
-    bool show_markers = false;
+    bool show_markers = true;
 
-    if (elapsed < 70) {
-        glitch_active = true;
-        glitch_bg = COLOR_MAGENTA;
-        glitch_x_offset = -3;
-    } else if (elapsed < 120) {
-        glitch_active = true;
-        glitch_bg = COLOR_CYAN;
-        glitch_x_offset = 2;
-    } else if (elapsed < 180) {
-        glitch_active = true;
-        glitch_bg = COLOR_MAGENTA;
-        glitch_x_offset = -1;
-    } else if (elapsed < 230) {
-        glitch_active = true;
-        glitch_bg = COLOR_CYAN;
-        glitch_x_offset = 0;
-    } else {
-        glitch_active = false;
-        show_markers = true;
-        if (elapsed < 350) {
-            float progress = (float)(elapsed - 230) / 120.0f;
-            // Buttery-smooth cubic ease-out!
-            float eased = 1.0f - (1.0f - progress) * (1.0f - progress) * (1.0f - progress);
-            marker_scale = 1.6f - 0.6f * eased;
-        } else {
-            marker_scale = 1.0f;
-        }
-    }
-
-    // Apply Elastic Value Pop scaling factor (Organic Damped Cosine Spring Bounce!)
-    if (elastic_anim_timer > 0) {
-        float pop_progress = 1.0f - ((float)elastic_anim_timer / 150.0f); // 0.0 when popped, 1.0 when settled
-        float spring = 0.4f * cosf(pop_progress * 3.14159f * 2.5f) * (1.0f - pop_progress) * (1.0f - pop_progress);
-        marker_scale += spring;
-        show_markers = true; // force corner markers visibility during value change
-    }
-
-    // Compute screen-wide glitch animation state variables
-    uint32_t screen_elapsed = now - screen_glitch_time;
     bool screen_glitch_active = false;
     uint16_t screen_glitch_bg = COLOR_BLACK;
     int16_t screen_glitch_x_offset = 0;
-
-    if (screen_elapsed < 70) {
-        screen_glitch_active = true;
-        screen_glitch_bg = COLOR_MAGENTA;
-        screen_glitch_x_offset = -3;
-    } else if (screen_elapsed < 120) {
-        screen_glitch_active = true;
-        screen_glitch_bg = COLOR_CYAN;
-        screen_glitch_x_offset = 2;
-    } else if (screen_elapsed < 180) {
-        screen_glitch_active = true;
-        screen_glitch_bg = COLOR_MAGENTA;
-        screen_glitch_x_offset = -1;
-    } else if (screen_elapsed < 230) {
-        screen_glitch_active = true;
-        screen_glitch_bg = COLOR_CYAN;
-        screen_glitch_x_offset = 0;
-    }
 
     // ----------------------------------------------------
     // 1. Draw Full-Width Header Area (Y: 0 to 48)
@@ -404,124 +309,132 @@ void draw_ui_dashboard() {
     uint16_t header_lbl_color = screen_glitch_active ? COLOR_BLACK : COLOR_GREY;
     uint16_t header_sub_color = screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY;
 
-    display.fill_rect(0, 0, 320, 48, header_bg);
-    
-    // Vertical BPM Label (Vaporwave Faux-Bold!)
-    display.draw_text(8 + header_x_shift, 6, "B", header_lbl_color, header_bg, 1);
-    display.draw_text(8 + header_x_shift + 1, 6, "B", header_lbl_color, header_bg, 1);
-    display.draw_text(8 + header_x_shift, 16, "P", header_lbl_color, header_bg, 1);
-    display.draw_text(8 + header_x_shift + 1, 16, "P", header_lbl_color, header_bg, 1);
-    display.draw_text(8 + header_x_shift, 26, "M", header_lbl_color, header_bg, 1);
-    display.draw_text(8 + header_x_shift + 1, 26, "M", header_lbl_color, header_bg, 1);
+    // --- Header Flicker Optimization & Partial Updates ---
+    static bool last_master_flash = false;
+    static int last_disk_save_state = -1;
+    static bool last_sequencer_playing = false;
+    static uint8_t last_scale_idx = 255;
+    static uint16_t last_bpm = 0;
+    static uint8_t last_cursor_track = 255;
+    static uint32_t last_cpu_draw_time = 0;
 
-    // Master Clock Flashing Check
     bool master_flash = sequencer_playing && ((shared_master_ticks / 12) % 2 == 0);
-    uint16_t bpm_bg = screen_glitch_active ? screen_glitch_bg : (master_flash ? COLOR_WHITE : COLOR_BLACK);
-    uint16_t bpm_fg = screen_glitch_active ? COLOR_BLACK : (master_flash ? COLOR_BLACK : COLOR_WHITE);
-
-    // Draw solid backplate for master clock text to enable smooth inversion flashing
-    display.fill_rect(16 + header_x_shift, 8, 62, 32, bpm_bg);
-
-    // Render large 16x24 bold digits for the actual BPM
-    char bpm_str[8];
-    sprintf(bpm_str, "%03d", shared_bpm);
-    for (int i = 0; i < 3; ++i) {
-        uint8_t digit = bpm_str[i] - '0';
-        draw_bitmap(20 + i * 18 + header_x_shift, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
-    }
-
-    // Draw Dual-Core CPU Load scope (X: 82 to 108)
-    if (!screen_glitch_active) {
-        display.draw_text(82 + header_x_shift, 6, "CPU", COLOR_DARK_GREY, header_bg, 1);
-        
-        // C0 Frame & Fill (Core 0 UI)
-        display.draw_rect(82 + header_x_shift, 15, 26, 4, COLOR_DARK_GREY);
-        int c0_len = (int)(24 * (ui_load / 100.0f));
-        display.fill_rect(83 + header_x_shift, 16, c0_len, 2, COLOR_GREY);
-
-        // C1 Frame & Fill (Core 1 Engine)
-        display.draw_rect(82 + header_x_shift, 23, 26, 4, COLOR_DARK_GREY);
-        int c1_len = (int)(24 * (engine_load / 100.0f));
-        display.fill_rect(83 + header_x_shift, 24, c1_len, 2, COLOR_CYAN); // Neon Cyan for Real-Time DSP!
-    }
-
-    // General Settings Panel (X: 115 to 320)
-    // Vertical Separator
-    display.fill_rect(112 + header_x_shift, 6, 1, 36, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
-
-    // State 1: Playback State Capsule/Pill Container (OLED-style Neon Green pop when active)
-    uint16_t pill_bg = screen_glitch_active ? screen_glitch_bg : (sequencer_playing ? 0x03E0 : COLOR_BLACK); 
-    uint16_t pill_fg = screen_glitch_active ? COLOR_BLACK : (sequencer_playing ? COLOR_BLACK : COLOR_LIGHT_GREY);
-    display.fill_rect(120 + header_x_shift, 10, 48, 16, pill_bg);
-    if (!screen_glitch_active && !sequencer_playing) {
-        display.draw_rect(120 + header_x_shift, 10, 48, 16, COLOR_DARK_GREY); // grey border
-    }
-    
-    draw_bitmap(124 + header_x_shift, 14, 8, 8, sequencer_playing ? icon_play : icon_stop, pill_fg, pill_bg);
-    display.draw_text(136 + header_x_shift, 14, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
-
-    // State 2: Active Track Scale Mode Capsule (Monochrome OLED)
-    const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
     uint8_t current_scale_idx = draw_params[cursor_track].scale_type;
     if (current_scale_idx >= 5) current_scale_idx = 0;
-    char scale_lbl[16];
-    sprintf(scale_lbl, "SCL:%s", scale_names[current_scale_idx]);
-    
-    uint16_t scale_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK; 
-    display.fill_rect(176 + header_x_shift, 10, 62, 16, scale_bg);
-    if (!screen_glitch_active) {
-        display.draw_rect(176 + header_x_shift, 10, 62, 16, COLOR_DARK_GREY); // Clean grey border
-    }
-    
-    draw_bitmap(180 + header_x_shift, 14, 8, 8, icon_note, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, scale_bg);
-    display.draw_text(192 + header_x_shift, 14, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE, scale_bg, 1);
 
-    // State 3: Storage Safe Command Save Capsule using floppy disk (Monochrome OLED)
-    uint16_t disk_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
-    uint8_t disk_y_offset = (disk_save_state > 0) ? 1 : 0; // slide down slightly on write!
-    display.fill_rect(244 + header_x_shift, 6, 70, 24, disk_bg);
-    
-    if (!screen_glitch_active) {
-        // Flash border when writing or saved!
-        uint16_t current_disk_border = COLOR_DARK_GREY;
-        if (disk_save_state == 1 || disk_save_state == 2) {
-            current_disk_border = COLOR_MAGENTA; // Flashing Magenta write outline!
-        } else if (disk_save_state == 3) {
-            current_disk_border = COLOR_CYAN;    // Glowing Cyan save success outline!
+    bool header_needs_update = force_redraw || screen_glitch_active ||
+                               (master_flash != last_master_flash) ||
+                               (disk_save_state != last_disk_save_state) ||
+                               (sequencer_playing != last_sequencer_playing) ||
+                               (current_scale_idx != last_scale_idx) ||
+                               (shared_bpm != last_bpm) ||
+                               (cursor_track != last_cursor_track) ||
+                               (now - last_cpu_draw_time > 1000);
+
+    if (header_needs_update) {
+        last_master_flash = master_flash;
+        last_disk_save_state = disk_save_state;
+        last_sequencer_playing = sequencer_playing;
+        last_scale_idx = current_scale_idx;
+        last_bpm = shared_bpm;
+        last_cursor_track = cursor_track;
+        if (now - last_cpu_draw_time > 1000) last_cpu_draw_time = now;
+
+        // Only fill the entire header background during glitches or forced/initial redraws
+        // to prevent heavy SPI bus flooding and extreme human-visible screen flickering
+        if (screen_glitch_active || force_redraw) {
+            display.fill_rect(0, 0, 320, 48, header_bg);
         }
-        display.draw_rect(244 + header_x_shift, 6, 70, 24, current_disk_border);
-    }
-    
-    uint16_t disk_icon_fg = COLOR_LIGHT_GREY;
-    if (disk_save_state == 1 || disk_save_state == 2) {
-        disk_icon_fg = COLOR_MAGENTA;
-    } else if (disk_save_state == 3) {
-        disk_icon_fg = COLOR_CYAN;
-    }
-    
-    draw_bitmap(248 + header_x_shift, 10 + disk_y_offset, 16, 16, icon_save_16x16, screen_glitch_active ? COLOR_BLACK : disk_icon_fg, disk_bg);
-    
-    if (disk_save_state == 0) {
-        display.draw_text(268 + header_x_shift, 10, "DISK", screen_glitch_active ? COLOR_BLACK : COLOR_GREY, disk_bg, 1);
-        display.draw_text(268 + header_x_shift, 19, "LT+PLY", header_sub_color, disk_bg, 1);
-    } else if (disk_save_state == 1 || disk_save_state == 2) {
-        display.draw_text(268 + header_x_shift, 10, "WRITE", screen_glitch_active ? COLOR_BLACK : COLOR_MAGENTA, disk_bg, 1);
-        display.draw_text(268 + header_x_shift + 1, 10, "WRITE", screen_glitch_active ? COLOR_BLACK : COLOR_MAGENTA, disk_bg, 1); // Faux-bold
-        display.draw_text(268 + header_x_shift, 19, "FLASH", screen_glitch_active ? COLOR_BLACK : COLOR_GREY, disk_bg, 1);
-    } else if (disk_save_state == 3) {
-        display.draw_text(268 + header_x_shift, 10, "SAVE", screen_glitch_active ? COLOR_BLACK : COLOR_CYAN, disk_bg, 1);
-        display.draw_text(268 + header_x_shift + 1, 10, "SAVE", screen_glitch_active ? COLOR_BLACK : COLOR_CYAN, disk_bg, 1); // Faux-bold
-        display.draw_text(268 + header_x_shift, 19, "OK!", screen_glitch_active ? COLOR_BLACK : COLOR_WHITE, disk_bg, 1);
-    }
+        
+        // Vertical BPM Label (Vaporwave Faux-Bold!) - Realigned Downward
+        display.draw_text(8 + header_x_shift, 11, "B", header_lbl_color, header_bg, 1);
+        display.draw_text(8 + header_x_shift + 1, 11, "B", header_lbl_color, header_bg, 1);
+        display.draw_text(8 + header_x_shift, 21, "P", header_lbl_color, header_bg, 1);
+        display.draw_text(8 + header_x_shift + 1, 21, "P", header_lbl_color, header_bg, 1);
+        display.draw_text(8 + header_x_shift, 31, "M", header_lbl_color, header_bg, 1);
+        display.draw_text(8 + header_x_shift + 1, 31, "M", header_lbl_color, header_bg, 1);
 
-    // Clean bottom divider line for full-width header
-    display.fill_rect(0, 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
+        // Master Clock Flashing Check
+        uint16_t bpm_bg = screen_glitch_active ? screen_glitch_bg : (master_flash ? COLOR_WHITE : COLOR_BLACK);
+        uint16_t bpm_fg = screen_glitch_active ? COLOR_BLACK : (master_flash ? COLOR_BLACK : COLOR_WHITE);
+
+        // Draw solid backplate for master clock text to enable smooth inversion flashing
+        display.fill_rect(16 + header_x_shift, 8, 62, 32, bpm_bg);
+
+        // Render large 16x24 bold digits for the actual BPM
+        char bpm_str[8];
+        sprintf(bpm_str, "%03d", shared_bpm);
+        for (int i = 0; i < 3; ++i) {
+            uint8_t digit = bpm_str[i] - '0';
+            draw_bitmap(20 + i * 18 + header_x_shift, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
+        }
+
+        // ----------------------------------------------------
+        // General Settings Panel (Left-Shifted Layout after removing CPU/Debug)
+        // ----------------------------------------------------
+        
+        // Vertical Separator (Moved left to X: 90)
+        display.fill_rect(90 + header_x_shift, 6, 1, 36, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
+
+        // State 1: Playback State Capsule/Pill Container (OLED-style Neon Green pop when active)
+        uint16_t pill_bg = screen_glitch_active ? screen_glitch_bg : (sequencer_playing ? 0x03E0 : COLOR_BLACK); 
+        uint16_t pill_fg = screen_glitch_active ? COLOR_BLACK : (sequencer_playing ? COLOR_BLACK : COLOR_LIGHT_GREY);
+        display.fill_rect(98 + header_x_shift, 8, 48, 20, pill_bg);
+        if (!screen_glitch_active && !sequencer_playing) {
+            display.draw_rect(98 + header_x_shift, 8, 48, 20, COLOR_DARK_GREY); // grey border
+        }
+        
+        draw_bitmap(100 + header_x_shift, 10, 16, 16, icon_play_pause_16x16, pill_fg, pill_bg);
+        display.draw_text(118 + header_x_shift, 14, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
+
+        // State 2: Active Track Scale Mode Capsule (Monochrome OLED)
+        const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
+        char scale_lbl[16];
+        sprintf(scale_lbl, "SCL:%s", scale_names[current_scale_idx]);
+        
+        uint16_t scale_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK; 
+        display.fill_rect(154 + header_x_shift, 8, 80, 20, scale_bg);
+        if (!screen_glitch_active) {
+            display.draw_rect(154 + header_x_shift, 8, 80, 20, COLOR_DARK_GREY); // Clean grey border
+        }
+        
+        draw_bitmap(156 + header_x_shift, 10, 16, 16, icon_note_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, scale_bg);
+        display.draw_text(174 + header_x_shift, 14, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE, scale_bg, 1);
+
+        // State 3: Storage Safe Command Save Capsule using floppy disk (Icon-Only Mini-Capsule!)
+        uint16_t disk_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
+        uint8_t disk_y_offset = (disk_save_state > 0) ? 1 : 0; // slide down slightly on write!
+        display.fill_rect(284 + header_x_shift, 6, 30, 24, disk_bg);
+        
+        if (!screen_glitch_active) {
+            // Flash border when writing or saved!
+            uint16_t current_disk_border = COLOR_DARK_GREY;
+            if (disk_save_state == 1 || disk_save_state == 2) {
+                current_disk_border = COLOR_MAGENTA; // Flashing Magenta write outline!
+            } else if (disk_save_state == 3) {
+                current_disk_border = COLOR_CYAN;    // Glowing Cyan save success outline!
+            }
+            display.draw_rect(284 + header_x_shift, 6, 30, 24, current_disk_border);
+        }
+        
+        uint16_t disk_icon_fg = COLOR_LIGHT_GREY;
+        if (disk_save_state == 1 || disk_save_state == 2) {
+            disk_icon_fg = COLOR_MAGENTA;
+        } else if (disk_save_state == 3) {
+            disk_icon_fg = COLOR_CYAN;
+        }
+        
+        draw_bitmap(291 + header_x_shift, 10 + disk_y_offset, 16, 16, icon_save_16x16, screen_glitch_active ? COLOR_BLACK : disk_icon_fg, disk_bg);
+
+        // Clean bottom divider line for full-width header
+        display.fill_rect(0, 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
+    }
 
     // ----------------------------------------------------
-    // 2. Draw 4 Track/Channel Strips (Y: 48 to 240, 48px each)
+    // 2. Draw 4 Track/Channel Strips (Y: 56 to 240, 46px each)
     // ----------------------------------------------------
     for (int trk = 0; trk < 4; ++trk) {
-        uint16_t trk_y = 48 + trk * 48;
+        uint16_t trk_y = 56 + trk * 46;
         bool is_muted = draw_params[trk].is_muted;
         bool is_active_track = (cursor_track == trk);
 
@@ -529,28 +442,17 @@ void draw_ui_dashboard() {
         uint16_t track_bg = COLOR_BLACK; // pure OLED black contrast!
         uint16_t row_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
 
-        // Bottom divider for each row
-        display.fill_rect(0, trk_y + 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
-
-        // Elektron-style Horizontal Framed highlights for active track row
-        if (is_active_track && !screen_glitch_active) {
-            display.fill_rect(0, trk_y + 3, 320, 1, COLOR_GREY);   // top framing line
-            display.fill_rect(0, trk_y + 45, 320, 1, COLOR_GREY);  // bottom framing line
-        }
+        // Elektron-style active track indication (No explicit lines, keeping pure borderless OLED layout!)
 
         // A. Left Column: CH ID and Speed Indicator (Large bold Elektron OLED track digit!)
-        display.draw_text(6 + row_x_shift, trk_y + 4, is_muted ? "MUT" : "CH", screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_GREY), track_bg, 1);
+        display.draw_text(6 + row_x_shift, trk_y + 6, is_muted ? "MUT" : "CH", screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_GREY), track_bg, 1);
         
         char trk_num_str[2] = { (char)('1' + trk), '\0' };
         uint16_t trk_num_color = screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_WHITE);
-        display.draw_text(20 + row_x_shift, trk_y + 2, trk_num_str, trk_num_color, track_bg, 2);
-        display.draw_text(20 + row_x_shift + 1, trk_y + 2, trk_num_str, trk_num_color, track_bg, 2); // faux bold
+        display.draw_text(24 + row_x_shift, trk_y + 6, trk_num_str, trk_num_color, track_bg, 1);
+        display.draw_text(24 + row_x_shift + 1, trk_y + 6, trk_num_str, trk_num_color, track_bg, 1); // faux bold
 
-        // Draw Step Hit Visual Envelope (horizontal neon cyan peak envelope line!)
-        if (!screen_glitch_active && !is_muted && track_hit_env[trk] > 0.0f) {
-            int line_w = (int)(12 * track_hit_env[trk]);
-            display.fill_rect(28 + row_x_shift, trk_y + 8, line_w, 2, COLOR_CYAN); // Glowing Neon Cyan pulse!
-        }
+
 
         if (is_muted) {
             // Draw Speaker Mute 16x16 icon in place of speed or next to it
@@ -606,13 +508,13 @@ void draw_ui_dashboard() {
             }
         }
 
-        // Render Speed in Size 2 (Large)
+        // Render Speed in Size 1 (Smart & balanced)
         display.fill_rect(spd_draw_x, trk_y + 14, 32, 18, spd_bg);
-        display.draw_text(spd_draw_x + 4, trk_y + 16, spd_str, spd_fg, spd_bg, 2);
+        display.draw_text(spd_draw_x + 8, trk_y + 21, spd_str, spd_fg, spd_bg, 1);
 
-        // Draw corner markers if speed cell is selected and glitch is done
-        if (speed_selected && show_markers && !screen_glitch_active) {
-            draw_corner_markers(6, trk_y + 14, 32, 18, marker_scale, cursor_color);
+        // Render pure monochrome cursor border if speed cell is active
+        if (speed_selected) {
+            display.draw_rect(spd_draw_x, trk_y + 14, 32, 18, cursor_color);
         }
 
         // Vertical boundary dividing Channel speed and parameter grid
@@ -640,20 +542,6 @@ void draw_ui_dashboard() {
                 } else {
                     bg = COLOR_BLACK;
                     fg = is_muted ? COLOR_GREY : COLOR_WHITE;
-                }
-            } else {
-                // Stochastic mutation breathing animation flash for MUT and RND columns!
-                if (!is_muted && (col == 4 || col == 9) && track_mut_env[trk] > 0.0f) {
-                    if (track_mut_env[trk] > 0.7f) {
-                        bg = COLOR_WHITE;
-                        fg = COLOR_BLACK;
-                    } else if (track_mut_env[trk] > 0.4f) {
-                        bg = COLOR_LIGHT_GREY;
-                        fg = COLOR_BLACK;
-                    } else {
-                        bg = COLOR_DARK_GREY;
-                        fg = COLOR_WHITE;
-                    }
                 }
             }
 
@@ -701,15 +589,12 @@ void draw_ui_dashboard() {
             }
 
             // Render value with or without faux-bolding weight
-            display.draw_text(draw_x + (col == 9 ? 4 : 5), cell_y + 6, val_str, fg, bg, 1);
+            display.draw_text(draw_x + (col == 9 ? 1 : 5), cell_y + 6, val_str, fg, bg, 1);
             if (is_bold && !screen_glitch_active) {
-                display.draw_text(draw_x + (col == 9 ? 4 : 5) + 1, cell_y + 6, val_str, fg, bg, 1); // Faux-bold overlay
+                display.draw_text(draw_x + (col == 9 ? 1 : 5) + 1, cell_y + 6, val_str, fg, bg, 1); // Faux-bold overlay
             }
             
-            // Draw corner markers if selected and glitch is done
-            if (is_selected && show_markers && !screen_glitch_active) {
-                draw_corner_markers(cell_x, cell_y, 26, 20, marker_scale, cursor_color);
-            }
+            // Simple border highlight already drawn in line 517
 
             // Draw column header label/icon at the top of Channel 1 only
             if (trk == 0) {
@@ -732,7 +617,7 @@ void draw_ui_dashboard() {
                 }
                 
                 if (icon_ptr) {
-                    draw_bitmap(cell_x + 9 + row_x_shift, trk_y - 12, 8, 8, icon_ptr, header_icon_fg, row_bg);
+                    draw_bitmap(cell_x + 5 + row_x_shift, trk_y - 14, 16, 16, icon_ptr, header_icon_fg, row_bg);
                 }
             }
         }
@@ -755,20 +640,30 @@ void draw_ui_dashboard() {
             uint16_t sx = 44 + s * step_w + row_x_shift;
             uint16_t sc;
             
+            EuclideanGenerator rhythm_calc;
+            bool is_active_beat = rhythm_calc.calculate_step(s, len, draw_params[trk].density, draw_params[trk].shift);
+
             if (screen_glitch_active) {
                 sc = COLOR_BLACK;
-            } else if (is_muted) {
-                sc = (s == curr) ? COLOR_GREY : COLOR_DARK_GREY;
+            } else if (s == curr) {
+                sc = is_muted ? COLOR_GREY : (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY);
             } else {
-                sc = (s == curr) ? (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY) : COLOR_DARK_GREY;
+                if (is_active_beat) {
+                    sc = is_muted ? COLOR_DARK_GREY : COLOR_CYAN; // Glow in beautiful Neon Cyan!
+                } else {
+                    sc = COLOR_DARK_GREY;
+                }
             }
             
-            // Render active steps as 3D taller blocks to create dynamic feel
+            // Render active steps as 3D taller blocks to create dynamic rhythm hills
             uint16_t sh = 2; // step height
             uint16_t sy = steps_y + 1;
             if (s == curr && !screen_glitch_active) {
-                sh = 4; // active step block pops up!
+                sh = 4; // active playhead block pops up!
                 sy = steps_y;
+            } else if (is_active_beat && !screen_glitch_active) {
+                sh = 3; // scheduled beat block is slightly elevated!
+                sy = steps_y + 1;
             }
             display.fill_rect(sx, sy, step_w - 1, sh, sc);
         }
@@ -816,7 +711,25 @@ void core1_entry() {
     uint32_t target_tick_us = (60 * 1000000) / (shared_bpm * 24);
     uint64_t next_tick_time = time_us_64() + target_tick_us;
     
+    // Thread-safe parameters cache to completely eliminate spinlock contention delay during critical ticks
+    TrackParams local_params_cache[4];
+    for (int i = 0; i < 4; ++i) {
+        local_params_cache[i] = shared_params[i]; // safe initial load
+    }
+    uint32_t last_cache_update_ms = 0;
+
     while (true) {
+        // Safe parameter cache update at a relaxed rate (approx 4ms) to completely shield real-time ticks
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        if (now_ms - last_cache_update_ms >= 4) {
+            uint32_t lock_save = lock_shared_params();
+            for (int i = 0; i < 4; ++i) {
+                local_params_cache[i] = shared_params[i];
+            }
+            unlock_shared_params(lock_save);
+            last_cache_update_ms = now_ms;
+        }
+
         // Continuous polling for scheduled MIDI events (Jitter note-on delay and Gate length note-off)
         for (int i = 0; i < 4; ++i) {
             tracks[i].update_scheduled_events(shared_bpm, midi);
@@ -833,16 +746,11 @@ void core1_entry() {
                 midi.send_clock();
                 
                 // B. Trigger a physical 5ms analog clock sync pulse via I2S DAC (GP26 Data, GP21 BCLK, GP22 LRCK)
-                // 110 samples at 22.05 kHz sample rate yields exactly a 5.0ms high-amplitude square wave pulse
                 clock_pulse_remaining_samples = 110;
                 
-                // C. Tick all 4 tracks to advance their playheads and generate generative MIDI notes
+                // C. Tick all 4 tracks to advance their playheads using spinlock-free cached parameters
                 for (int i = 0; i < 4; ++i) {
-                    // Update track parameters live and thread-safely from Core 0 shared memory
-                    TrackParams local_p;
-                    uint32_t lock_save = lock_shared_params();
-                    local_p = shared_params[i];
-                    unlock_shared_params(lock_save);
+                    TrackParams local_p = local_params_cache[i];
 
                     tracks[i].set_params(
                         local_p.length,
@@ -874,6 +782,10 @@ void core1_entry() {
     }
 }
 
+// Static state for physical key auto-repeat
+uint32_t key_repeat_timers[KEY_COUNT] = {0};
+bool key_was_held[KEY_COUNT] = {false};
+
 int main() {
     stdio_init_all();
     sleep_ms(2000); // Settling delay for USB debug terminal
@@ -904,7 +816,7 @@ int main() {
     printf("[Core 0] Launching Core 1 Realtime Engine...\n");
     multicore_launch_core1(core1_entry);
     
-    bool force_redraw = true;
+    force_redraw = true;
     uint32_t last_time = to_ms_since_boot(get_absolute_time());
 
     while (true) {
@@ -912,14 +824,13 @@ int main() {
         uint32_t dt = current_time - last_time;
         last_time = current_time;
 
-        // Perform safe blocking QSPI Flash save when progress timer demands it
+        // Perform safe blocking QSPI Flash save instantly
         if (disk_save_state == 2) {
             multicore_lockout_start_blocking();
             storage.save(shared_params);
             multicore_lockout_end_blocking();
 
-            disk_save_state = 3;
-            disk_save_timer = 500; // Glowing success capsule hold time
+            disk_save_state = 0; // Immediately return to idle
             force_redraw = true;
         }
 
@@ -931,31 +842,51 @@ int main() {
         uint8_t old_cursor_track = cursor_track;
         uint8_t old_cursor_col = cursor_col;
 
-        // Handle navigation D-pad
-        if (input.is_pressed(KEY_UP)) {
+        // High-Speed Autorepeat Navigation Handler
+        auto handle_nav_key = [&](KeyIndex key, std::function<void()> press_action) {
+            if (input.is_held(key)) {
+                uint32_t now = to_ms_since_boot(get_absolute_time());
+                if (!key_was_held[key]) {
+                    // Initial instant trigger!
+                    press_action();
+                    key_repeat_timers[key] = now + 180; // Sharp 180ms hold delay!
+                    key_was_held[key] = true;
+                } else if (now >= key_repeat_timers[key]) {
+                    // Repeat trigger!
+                    press_action();
+                    key_repeat_timers[key] = now + 50; // Super-fast 50ms repeat rate!
+                }
+            } else {
+                key_was_held[key] = false;
+            }
+        };
+
+        // Handle navigation D-pad with responsive auto-repeat
+        handle_nav_key(KEY_UP, [&]() {
             if (input.is_shift_active()) {
-                // Shift + UP: Increment global BPM
                 shared_bpm = (shared_bpm + 5 <= 250) ? shared_bpm + 5 : 250;
                 value_changed = true;
             } else {
                 if (cursor_track > 0) { cursor_track--; value_changed = true; }
             }
-        }
-        if (input.is_pressed(KEY_DOWN)) {
+        });
+
+        handle_nav_key(KEY_DOWN, [&]() {
             if (input.is_shift_active()) {
-                // Shift + DOWN: Decrement global BPM
                 shared_bpm = (shared_bpm - 5 >= 40) ? shared_bpm - 5 : 40;
                 value_changed = true;
             } else {
                 if (cursor_track < 3) { cursor_track++; value_changed = true; }
             }
-        }
-        if (input.is_pressed(KEY_LEFT)) {
+        });
+
+        handle_nav_key(KEY_LEFT, [&]() {
             if (cursor_col > 0) { cursor_col--; value_changed = true; }
-        }
-        if (input.is_pressed(KEY_RIGHT)) {
+        });
+
+        handle_nav_key(KEY_RIGHT, [&]() {
             if (cursor_col < 9) { cursor_col++; value_changed = true; }
-        }
+        });
 
         if (cursor_track != old_cursor_track || cursor_col != old_cursor_col) {
             cursor_move_time = to_ms_since_boot(get_absolute_time());
@@ -973,9 +904,8 @@ int main() {
         // Handle Play/Stop toggle (and Shift + Play to save to flash)
         if (input.is_pressed(KEY_PLAY)) {
             if (input.is_shift_active()) {
-                // Trigger the beautiful interactive floppy progress write animation sequence
-                disk_save_state = 1;
-                disk_save_timer = 300; 
+                // Instantly trigger flash save sequence (bypassing animation sequence)
+                disk_save_state = 2;
                 value_changed = true;
             } else {
                 sequencer_playing = !sequencer_playing;
@@ -1032,7 +962,6 @@ int main() {
                     p.jitter = static_cast<uint8_t>(get_rand_32() % 40);
                     p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
                     tracks[cursor_track].randomize_pattern();
-                    screen_glitch_time = to_ms_since_boot(get_absolute_time());
                     break;
                 }
             }
@@ -1077,7 +1006,6 @@ int main() {
                     p.jitter = static_cast<uint8_t>(get_rand_32() % 40);
                     p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
                     tracks[cursor_track].randomize_pattern();
-                    screen_glitch_time = to_ms_since_boot(get_absolute_time());
                     break;
                 }
             }
@@ -1086,48 +1014,13 @@ int main() {
             unlock_shared_params(lock_save);
         }
 
-        // Trigger Elastic Value Pop corner markers spring bounce on any value adjustment
-        if (value_changed && cursor_track == old_cursor_track && cursor_col == old_cursor_col) {
-            elastic_anim_timer = 150;
-        }
-
-        // Reset cursor color active timer on any changes (movement or edit) to wake up Cyan
-        if (value_changed) {
-            cursor_move_time = current_time;
-        }
-
-        // Keep redrawing during cursor movement animations for smooth 60fps glitch/snap-in playback
-        if (current_time - cursor_move_time < 350) {
-            force_redraw = true;
-        }
-
-        // Keep redrawing during screen-wide glitch flashes
-        if (current_time - screen_glitch_time < 230) {
-            force_redraw = true;
-        }
-
-        // Keep redrawing during the 5-second interactive cursor color fade out
-        if (current_time - cursor_move_time < 5000) {
-            force_redraw = true;
-        }
-
-        // Keep redrawing during elastic value pops, active triggers, and floppy progress animations
-        if (elastic_anim_timer > 0 || disk_save_state > 0) {
-            force_redraw = true;
-        }
-        for (int i = 0; i < 4; ++i) {
-            if (track_hit_env[i] > 0.0f || track_mut_env[i] > 0.0f) {
-                force_redraw = true;
-            }
-        }
-
         // Draw UI dashboard
         if (value_changed || force_redraw || sequencer_playing) {
             draw_ui_dashboard();
             force_redraw = false;
+        } else {
+            sleep_ms(10); // Sleep only on idle frames to keep inputs ultra-responsive and latency-free!
         }
-
-        sleep_ms(16); // ~60 Hz UI update evaluation
     }
     
     return 0;

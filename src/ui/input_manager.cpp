@@ -50,24 +50,14 @@ void InputManager::update(uint32_t delta_time_ms) {
         // Read physical pin state (inverted: true = pressed / LOW)
         bool physical_pressed = !gpio_get(key.gpio_pin);
         
-        // --- Debounce Filter ---
-        if (physical_pressed == key.raw_state) {
-            if (key.debounce_counter < DEBOUNCE_THRESHOLD) {
-                key.debounce_counter++;
-                if (key.debounce_counter >= DEBOUNCE_THRESHOLD) {
-                    key.current_state = physical_pressed;
-                }
-            }
-        } else {
-            // State changed physically, reset debounce counter
-            key.raw_state = physical_pressed;
-            key.debounce_counter = 0;
-        }
+        // --- High-Speed Responsive Direct Input Scan (Zero-Lag Edge Detection) ---
+        bool next_state = physical_pressed;
         
         // --- State Machine Events ---
-        // Single frame triggers
-        key.just_pressed = (key.current_state && !key.last_state);
-        key.just_released = (!key.current_state && key.last_state);
+        key.just_pressed = (next_state && !key.current_state);
+        key.just_released = (!next_state && key.current_state);
+        
+        key.current_state = next_state;
         
         // Duration counting & Long press detection
         if (key.current_state) {
@@ -84,12 +74,16 @@ void InputManager::update(uint32_t delta_time_ms) {
 
 bool InputManager::is_pressed(KeyIndex key) const {
     if (key >= KEY_COUNT) return false;
-    return keys[key].just_pressed;
+    bool pressed = keys[key].just_pressed;
+    keys[key].just_pressed = false; // Event consumed (Read-Once One-Shot design)
+    return pressed;
 }
 
 bool InputManager::is_released(KeyIndex key) const {
     if (key >= KEY_COUNT) return false;
-    return keys[key].just_released;
+    bool released = keys[key].just_released;
+    keys[key].just_released = false; // Event consumed (Read-Once One-Shot design)
+    return released;
 }
 
 bool InputManager::is_held(KeyIndex key) const {

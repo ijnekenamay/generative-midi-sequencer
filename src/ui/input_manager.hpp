@@ -18,8 +18,8 @@ struct KeyState {
     uint8_t gpio_pin;
     bool current_state;       // debounced state (true = pressed/LOW, false = released/HIGH)
     bool last_state;          // state in the previous frame
-    bool just_pressed;        // true only on the frame the button was pressed
-    bool just_released;       // true only on the frame the button was released
+    mutable bool just_pressed;// true only on the frame the button was pressed
+    mutable bool just_released;// true only on the frame the button was released
     uint32_t press_duration_ms;// how long the key has been held down
     mutable bool long_pressed_fired;  // flags if the long press event was already dispatched
     

@@ -289,10 +289,10 @@ void DisplayController::draw_char(uint16_t x, uint16_t y, char c, uint16_t color
     if (c < 32 || c > 127) c = 127; // clamp to last fallback character
     uint8_t char_index = c - 32;
     
-    for (int8_t col = 0; col < 8; ++col) {
-        uint8_t line = font_8x8[char_index][col];
-        for (int8_t row = 0; row < 8; ++row) {
-            if (line & (1 << (7 - row))) {
+    for (int8_t row = 0; row < 8; ++row) {
+        uint8_t line = font_8x8[char_index][row]; // Get row byte from font data
+        for (int8_t col = 0; col < 8; ++col) {    // Expand bits horizontally
+            if (line & (1 << (7 - col))) {
                 if (scale == 1) {
                     draw_pixel(x + col, y + row, color);
                 } else {
