@@ -25,11 +25,5 @@ pico_enable_stdio_usb(generative_midi_sequencer 1)
 pico_enable_stdio_uart(generative_midi_sequencer 0)
 
 # Add extra outputs (hex, bin, uf2 for flashing)
-# pico_add_extra_outputs(generative_midi_sequencer)
+pico_add_extra_outputs(generative_midi_sequencer)
 
-# Generate standard .bin and .uf2 outputs via post-build commands
-add_custom_command(TARGET generative_midi_sequencer POST_BUILD
-    COMMAND "C:/PROGRA~1/DAISYT~1/bin/arm-none-eabi-objcopy.exe" -O binary ${CMAKE_CURRENT_BINARY_DIR}/generative_midi_sequencer.elf ${CMAKE_CURRENT_BINARY_DIR}/generative_midi_sequencer.bin
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/uf2conv.py ${CMAKE_CURRENT_BINARY_DIR}/generative_midi_sequencer.bin ${CMAKE_CURRENT_BINARY_DIR}/generative_midi_sequencer.uf2
-    COMMENT "Generating .bin and .uf2 outputs..."
-)

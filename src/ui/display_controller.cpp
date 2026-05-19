@@ -105,12 +105,12 @@ static const uint8_t font_8x8[96][8] = {
 };
 
 DisplayController::DisplayController() {
-    // Pico Tracker physical pin mappings from PINOUT.md
-    pin_miso = 16; // Display RESET (since SPI MISO is not needed, wired to RESET)
-    pin_cs   = 17;
-    pin_sck  = 18;
-    pin_mosi = 19;
-    pin_dc   = 20;
+    // Pico Tracker physical pin mappings from J7 DISPLAY Schematic (SPI1)
+    pin_miso = 22; // Display RESET (DP4 -> GP22)
+    pin_cs   = 20; // Display CS (DP3 -> GP20)
+    pin_sck  = 26; // Display SCK (DP7 -> GP26)
+    pin_mosi = 27; // Display MOSI (DP6 -> GP27)
+    pin_dc   = 21; // Display D/C (DP5 -> GP21)
 
     // Landscape Mode standard orientation
     width = 320;
@@ -121,21 +121,21 @@ DisplayController::DisplayController() {
 void DisplayController::write_cmd(uint8_t cmd) {
     gpio_put(pin_dc, 0); // DC Low = Command
     gpio_put(pin_cs, 0); // Select Display
-    spi_write_blocking(spi0, &cmd, 1);
+    spi_write_blocking(spi1, &cmd, 1);
     gpio_put(pin_cs, 1); // Deselect
 }
 
 void DisplayController::write_data(uint8_t data) {
     gpio_put(pin_dc, 1); // DC High = Data
     gpio_put(pin_cs, 0);
-    spi_write_blocking(spi0, &data, 1);
+    spi_write_blocking(spi1, &data, 1);
     gpio_put(pin_cs, 1);
 }
 
 void DisplayController::write_data_buf(const uint8_t* buf, uint32_t len) {
     gpio_put(pin_dc, 1);
     gpio_put(pin_cs, 0);
-    spi_write_blocking(spi0, buf, len);
+    spi_write_blocking(spi1, buf, len);
     gpio_put(pin_cs, 1);
 }
 
@@ -150,8 +150,8 @@ void DisplayController::reset() {
 }
 
 void DisplayController::init() {
-    // 1. Initialize SPI0 at 48 MHz (maximum safe speed for ILI9341 on breadboard)
-    spi_init(spi0, 48000000);
+    // 1. Initialize SPI1 at 48 MHz (maximum safe speed for ILI9341 on breadboard)
+    spi_init(spi1, 48000000);
     
     // 2. Map SPI functions to GPIO pins
     gpio_set_function(pin_sck, GPIO_FUNC_SPI);
@@ -271,7 +271,7 @@ void DisplayController::fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h
     
     while (total_pixels > 0) {
         uint32_t to_write = (total_pixels > chunk_size) ? chunk_size : total_pixels;
-        spi_write_blocking(spi0, color_buf, to_write * 2);
+        spi_write_blocking(spi1, color_buf, to_write * 2);
         total_pixels -= to_write;
     }
     

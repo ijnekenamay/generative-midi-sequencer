@@ -3,16 +3,16 @@
 #include "hardware/gpio.h"
 
 InputManager::InputManager() {
-    // Map indices to physical Pico GPIO pins as specified in PINOUT.md
-    keys[KEY_LEFT].gpio_pin = 2;
-    keys[KEY_DOWN].gpio_pin = 3;
-    keys[KEY_RIGHT].gpio_pin = 4;
-    keys[KEY_UP].gpio_pin = 5;
-    keys[KEY_RT].gpio_pin = 6;
-    keys[KEY_B].gpio_pin = 7;
-    keys[KEY_A].gpio_pin = 8;
-    keys[KEY_LT].gpio_pin = 9;
-    keys[KEY_PLAY].gpio_pin = 10;
+    // Map indices to physical Pico GPIO pins as specified in the schematic
+    keys[KEY_LEFT].gpio_pin = 8;
+    keys[KEY_DOWN].gpio_pin = 9;
+    keys[KEY_RIGHT].gpio_pin = 10;
+    keys[KEY_UP].gpio_pin = 11;
+    keys[KEY_RT].gpio_pin = 12;
+    keys[KEY_B].gpio_pin = 13;
+    keys[KEY_A].gpio_pin = 14;
+    keys[KEY_LT].gpio_pin = 15;
+    keys[KEY_PLAY].gpio_pin = 16;
     
     // Initialize states to zero/defaults
     for (int i = 0; i < KEY_COUNT; ++i) {

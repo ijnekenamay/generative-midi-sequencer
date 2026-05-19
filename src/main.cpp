@@ -100,26 +100,26 @@ void init_pio_i2s() {
     // 1. Claim and load the program into PIO instruction memory
     uint offset = pio_add_program(pio, &i2s_pio_program);
     
-    // 2. Set GP26 (Data) as PIO Output Pin
-    pio_gpio_init(pio, 26);
+    // 2. Set GP17 (Data) as PIO Output Pin (GY-PCM5102 DIN)
+    pio_gpio_init(pio, 17);
     
-    // 3. Set GP21 (BCLK) and GP22 (LRCK) as PIO Side-Set Pins
-    pio_gpio_init(pio, 21);
-    pio_gpio_init(pio, 22);
+    // 3. Set GP18 (BCLK) and GP19 (LRCK) as PIO Side-Set Pins (GY-PCM5102 BCK & LRCK)
+    pio_gpio_init(pio, 18);
+    pio_gpio_init(pio, 19);
     
     // Configure pin directions
-    pio_sm_set_consecutive_pindirs(pio, state_machine, 26, 1, true); // Data Out
-    pio_sm_set_consecutive_pindirs(pio, state_machine, 21, 2, true); // BCLK & LRCK Out
+    pio_sm_set_consecutive_pindirs(pio, state_machine, 17, 1, true); // Data Out
+    pio_sm_set_consecutive_pindirs(pio, state_machine, 18, 2, true); // BCLK & LRCK Out
     
     // 4. Configure State Machine settings
     pio_sm_config c = pio_get_default_sm_config();
     sm_config_set_wrap(&c, offset + 0, offset + 7);
     
-    // Map side-set pins (GP21, 2 bits)
-    sm_config_set_sideset_pins(&c, 21);
+    // Map side-set pins (GP18, 2 bits)
+    sm_config_set_sideset_pins(&c, 18);
     
-    // Map data out pin (GP26, 1 bit)
-    sm_config_set_out_pins(&c, 26, 1);
+    // Map data out pin (GP17, 1 bit)
+    sm_config_set_out_pins(&c, 17, 1);
     
     // Configure FIFO shifting (shift right, autopull enabled, threshold = 32 bits)
     sm_config_set_out_shift(&c, true, true, 32);

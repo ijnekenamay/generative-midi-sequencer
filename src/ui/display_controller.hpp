@@ -18,11 +18,11 @@
 
 class DisplayController {
 private:
-    uint8_t pin_miso; // GP16 (often used as RESET for the display if MISO is not needed)
-    uint8_t pin_cs;   // GP17
-    uint8_t pin_sck;  // GP18
-    uint8_t pin_mosi; // GP19
-    uint8_t pin_dc;   // GP20
+    uint8_t pin_miso; // GP22 (RESET / DP4)
+    uint8_t pin_cs;   // GP20 (CS / DP3)
+    uint8_t pin_sck;  // GP26 (SCK / DP7)
+    uint8_t pin_mosi; // GP27 (MOSI / DP6)
+    uint8_t pin_dc;   // GP21 (D/C / DP5)
     
     uint16_t width;
     uint16_t height;
