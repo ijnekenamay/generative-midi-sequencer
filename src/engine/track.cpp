@@ -31,6 +31,10 @@ void Track::reset() {
     pending_note_off_time = 0;
 }
 
+void Track::randomize_pattern() {
+    pitch.randomize_seed();
+}
+
 void Track::set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint8_t root, ScaleType scale, uint8_t divide, uint8_t jit, uint8_t gt, bool muted) {
     length = (len > 0) ? len : 1;
     density = (dens <= length) ? dens : length;

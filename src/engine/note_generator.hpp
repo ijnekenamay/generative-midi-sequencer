@@ -32,6 +32,11 @@ public:
     void reset();
 
     /**
+     * Randomizes the shift register seed using hardware random generator.
+     */
+    void randomize_seed();
+
+    /**
      * Steps the Turing Machine shift register.
      * Shifts bits right, and with a probability defined by mutation_rate,
      * either loops the bit or flips it.

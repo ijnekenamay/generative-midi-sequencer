@@ -24,6 +24,14 @@ void NoteGenerator::reset() {
     shift_register = 0x9E37; 
 }
 
+void NoteGenerator::randomize_seed() {
+    // Generate a random 16-bit seed using the hardware random number generator
+    shift_register = static_cast<uint16_t>(get_rand_32() & 0xFFFF);
+    if (shift_register == 0) {
+        shift_register = 0x9E37; // Avoid all zeros which lock the shift register
+    }
+}
+
 uint8_t NoteGenerator::step(uint8_t mutation_rate) {
     // Get the LSB (last bit of the shift register)
     bool feedback_bit = (shift_register & 0x0001) != 0;

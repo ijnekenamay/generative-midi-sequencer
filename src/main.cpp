@@ -2,6 +2,7 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/time.h"
+#include "pico/rand.h"
 #include "hardware/pio.h"
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
@@ -140,12 +141,9 @@ DisplayController display;
 
 // Navigation States
 uint8_t cursor_track = 0; // 0 to 3
-uint8_t cursor_col = 0;   // 0 to 8 (SPD, LEN, DEN, SHF, MUT, JIT, GAT, ROT, SCL)
+uint8_t cursor_col = 0;   // 0 to 9 (SPD, LEN, DEN, SHF, MUT, JIT, GAT, ROT, SCL, RND)
 volatile uint32_t cursor_move_time = 0;
-
-const char* column_headers[8] = {
-    "LEN", "DEN", "SHF", "MUT", "JIT", "GAT", "ROT", "SCL"
-};
+volatile uint32_t screen_glitch_time = 0; // Trigger for screen-wide analog glitch flash
 
 // --- Custom 8x8 Pixel Art Bitmaps ---
 const uint8_t icon_play[8] = {
@@ -273,54 +271,84 @@ void draw_ui_dashboard() {
         }
     }
 
+    // Compute screen-wide glitch animation state variables
+    uint32_t screen_elapsed = now - screen_glitch_time;
+    bool screen_glitch_active = false;
+    uint16_t screen_glitch_bg = COLOR_BLACK;
+    int16_t screen_glitch_x_offset = 0;
+
+    if (screen_elapsed < 70) {
+        screen_glitch_active = true;
+        screen_glitch_bg = COLOR_MAGENTA;
+        screen_glitch_x_offset = -3;
+    } else if (screen_elapsed < 120) {
+        screen_glitch_active = true;
+        screen_glitch_bg = COLOR_CYAN;
+        screen_glitch_x_offset = 2;
+    } else if (screen_elapsed < 180) {
+        screen_glitch_active = true;
+        screen_glitch_bg = COLOR_MAGENTA;
+        screen_glitch_x_offset = -1;
+    } else if (screen_elapsed < 230) {
+        screen_glitch_active = true;
+        screen_glitch_bg = COLOR_CYAN;
+        screen_glitch_x_offset = 0;
+    }
+
     // ----------------------------------------------------
     // 1. Draw Full-Width Header Area (Y: 0 to 48)
     // ----------------------------------------------------
-    display.fill_rect(0, 0, 320, 48, COLOR_BLACK);
+    int16_t header_x_shift = screen_glitch_active ? screen_glitch_x_offset : 0;
+    uint16_t header_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
+    uint16_t header_fg = screen_glitch_active ? COLOR_BLACK : COLOR_WHITE;
+    uint16_t header_lbl_color = screen_glitch_active ? COLOR_BLACK : COLOR_GREY;
+    uint16_t header_sub_color = screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY;
+
+    display.fill_rect(0, 0, 320, 48, header_bg);
     
     // Vertical BPM Label
-    display.draw_text(8, 6, "B", COLOR_GREY, COLOR_BLACK, 1);
-    display.draw_text(8, 16, "P", COLOR_GREY, COLOR_BLACK, 1);
-    display.draw_text(8, 26, "M", COLOR_GREY, COLOR_BLACK, 1);
+    display.draw_text(8 + header_x_shift, 6, "B", header_lbl_color, header_bg, 1);
+    display.draw_text(8 + header_x_shift, 16, "P", header_lbl_color, header_bg, 1);
+    display.draw_text(8 + header_x_shift, 26, "M", header_lbl_color, header_bg, 1);
 
     // Master Clock Flashing Check
     bool master_flash = sequencer_playing && ((shared_master_ticks / 12) % 2 == 0);
-    uint16_t bpm_bg = master_flash ? COLOR_WHITE : COLOR_BLACK;
-    uint16_t bpm_fg = master_flash ? COLOR_BLACK : COLOR_WHITE;
+    uint16_t bpm_bg = screen_glitch_active ? screen_glitch_bg : (master_flash ? COLOR_WHITE : COLOR_BLACK);
+    uint16_t bpm_fg = screen_glitch_active ? COLOR_BLACK : (master_flash ? COLOR_BLACK : COLOR_WHITE);
 
     // Draw solid backplate for master clock text to enable smooth inversion flashing
-    display.fill_rect(16, 8, 62, 32, bpm_bg);
+    display.fill_rect(16 + header_x_shift, 8, 62, 32, bpm_bg);
 
     // Render large 16x24 bold digits for the actual BPM
     char bpm_str[8];
     sprintf(bpm_str, "%03d", shared_bpm);
     for (int i = 0; i < 3; ++i) {
         uint8_t digit = bpm_str[i] - '0';
-        draw_bitmap(20 + i * 18, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
+        draw_bitmap(20 + i * 18 + header_x_shift, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
     }
 
     // General Settings Panel (X: 115 to 320)
     // Vertical Separator
-    display.fill_rect(112, 6, 1, 36, COLOR_DARK_GREY);
+    display.fill_rect(112 + header_x_shift, 6, 1, 36, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
 
     // State 1: Playback State Icon & Text
-    draw_bitmap(124, 12, 8, 8, sequencer_playing ? icon_play : icon_stop, COLOR_WHITE, COLOR_BLACK);
-    display.draw_text(138, 12, sequencer_playing ? "RUN" : "STOP", 
-                      sequencer_playing ? COLOR_WHITE : COLOR_GREY, COLOR_BLACK, 1);
+    draw_bitmap(124 + header_x_shift, 12, 8, 8, sequencer_playing ? icon_play : icon_stop, header_fg, header_bg);
+    display.draw_text(138 + header_x_shift, 12, sequencer_playing ? "RUN" : "STOP", 
+                      sequencer_playing ? header_fg : (screen_glitch_active ? COLOR_BLACK : COLOR_GREY), header_bg, 1);
 
     // State 2: Active Track Scale Mode
-    draw_bitmap(180, 12, 8, 8, icon_note, COLOR_WHITE, COLOR_BLACK);
+    draw_bitmap(180 + header_x_shift, 12, 8, 8, icon_note, header_fg, header_bg);
     char scale_lbl[8];
     sprintf(scale_lbl, "SCL:S%d", draw_params[cursor_track].scale_type + 1);
-    display.draw_text(194, 12, scale_lbl, COLOR_LIGHT_GREY, COLOR_BLACK, 1);
+    display.draw_text(194 + header_x_shift, 12, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, header_bg, 1);
 
     // State 3: Storage Safe Command Save using the high-definition 16x16 floppy disk icon
-    draw_bitmap(248, 8, 16, 16, icon_save_16x16, COLOR_WHITE, COLOR_BLACK);
-    display.draw_text(268, 8, "DISK", COLOR_GREY, COLOR_BLACK, 1);
-    display.draw_text(268, 18, "LT+PLY", COLOR_DARK_GREY, COLOR_BLACK, 1);
+    draw_bitmap(248 + header_x_shift, 8, 16, 16, icon_save_16x16, header_fg, header_bg);
+    display.draw_text(268 + header_x_shift, 8, "DISK", screen_glitch_active ? COLOR_BLACK : COLOR_GREY, header_bg, 1);
+    display.draw_text(268 + header_x_shift, 18, "LT+PLY", header_sub_color, header_bg, 1);
 
     // Clean bottom divider line for full-width header
-    display.fill_rect(0, 47, 320, 1, COLOR_WHITE);
+    display.fill_rect(0, 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE);
 
     // ----------------------------------------------------
     // 2. Draw 4 Track/Channel Strips (Y: 48 to 240, 48px each)
@@ -329,20 +357,22 @@ void draw_ui_dashboard() {
         uint16_t trk_y = 48 + trk * 48;
         bool is_muted = draw_params[trk].is_muted;
 
+        int16_t row_x_shift = screen_glitch_active ? screen_glitch_x_offset : 0;
+        uint16_t row_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
+
         // Bottom divider for each row
-        display.fill_rect(0, trk_y + 47, 320, 1, COLOR_DARK_GREY);
+        display.fill_rect(0, trk_y + 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
 
         // A. Left Column: CH ID (MUT if muted), Speed Indicator (flashes via black/white inversion!)
         char ch_lbl[8];
         sprintf(ch_lbl, is_muted ? "MUT%d" : "CH%d", trk + 1);
         
-        // Draw the text label or the beautiful speaker mute icon if muted
+        uint16_t ch_color = screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_GREY);
+        display.draw_text(6 + row_x_shift, trk_y + 4, ch_lbl, ch_color, row_bg, 1);
+
         if (is_muted) {
-            display.draw_text(6, trk_y + 2, ch_lbl, COLOR_DARK_GREY, COLOR_BLACK, 1);
             // Draw Speaker Mute 16x16 icon in place of speed or next to it
-            draw_bitmap(24, trk_y + 14, 16, 16, icon_mute_16x16, COLOR_DARK_GREY, COLOR_BLACK);
-        } else {
-            display.draw_text(6, trk_y + 4, ch_lbl, COLOR_GREY, COLOR_BLACK, 1);
+            draw_bitmap(24 + row_x_shift, trk_y + 14, 16, 16, icon_mute_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY, row_bg);
         }
 
         // Format Clock Divide into speed multiplication factor (large bold size 2)
@@ -363,9 +393,12 @@ void draw_ui_dashboard() {
         
         uint16_t spd_bg = COLOR_BLACK;
         uint16_t spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
-        int16_t spd_draw_x = 6;
+        int16_t spd_draw_x = 6 + row_x_shift;
 
-        if (speed_selected) {
+        if (screen_glitch_active) {
+            spd_bg = screen_glitch_bg;
+            spd_fg = COLOR_BLACK;
+        } else if (speed_selected) {
             if (glitch_active) {
                 spd_bg = glitch_bg;
                 spd_fg = COLOR_BLACK;
@@ -396,24 +429,27 @@ void draw_ui_dashboard() {
         display.draw_text(spd_draw_x + 4, trk_y + 16, spd_str, spd_fg, spd_bg, 2);
 
         // Draw corner markers if speed cell is selected and glitch is done
-        if (speed_selected && show_markers) {
+        if (speed_selected && show_markers && !screen_glitch_active) {
             draw_corner_markers(6, trk_y + 14, 32, 18, marker_scale, COLOR_CYAN);
         }
 
         // Vertical boundary dividing Channel speed and parameter grid
-        display.fill_rect(42, trk_y + 4, 1, 38, COLOR_DARK_GREY);
+        display.fill_rect(42 + row_x_shift, trk_y + 4, 1, 38, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
 
-        // B. Right Column: Expanded Parameter Grid Cells (Col 1 to 8 starts at X: 45)
-        for (int col = 1; col <= 8; ++col) {
-            uint16_t cell_x = 45 + (col - 1) * 34;
+        // B. Right Column: Expanded Parameter Grid Cells (Col 1 to 9 starts at X: 44)
+        for (int col = 1; col <= 9; ++col) {
+            uint16_t cell_x = 44 + (col - 1) * 30;
             uint16_t cell_y = trk_y + 4;
 
             bool is_selected = (cursor_track == trk && cursor_col == col);
             uint16_t bg = COLOR_BLACK;
             uint16_t fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
-            int16_t draw_x = cell_x;
+            int16_t draw_x = cell_x + row_x_shift;
 
-            if (is_selected) {
+            if (screen_glitch_active) {
+                bg = screen_glitch_bg;
+                fg = COLOR_BLACK;
+            } else if (is_selected) {
                 if (glitch_active) {
                     bg = glitch_bg;
                     fg = COLOR_BLACK;
@@ -424,9 +460,9 @@ void draw_ui_dashboard() {
                 }
             }
 
-            // Draw parameter cell box (width 30, height 20)
-            display.fill_rect(draw_x, cell_y, 30, 20, bg);
-            display.draw_rect(draw_x, cell_y, 30, 20, COLOR_DARK_GREY);
+            // Draw parameter cell box (width 26, height 20)
+            display.fill_rect(draw_x, cell_y, 26, 20, bg);
+            display.draw_rect(draw_x, cell_y, 26, 20, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
 
             char val_str[6] = "";
             switch (col) {
@@ -438,34 +474,63 @@ void draw_ui_dashboard() {
                 case 6: sprintf(val_str, "%02d", draw_params[trk].gate); break;
                 case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
                 case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
-            }
-            display.draw_text(draw_x + 5, cell_y + 6, val_str, fg, bg, 1);
-            
-            // Draw corner markers if selected and glitch is done
-            if (is_selected && show_markers) {
-                draw_corner_markers(cell_x, cell_y, 30, 20, marker_scale, COLOR_CYAN);
+                case 9: sprintf(val_str, "RND"); break;
             }
 
-            // Draw column header label at the top of Channel 1 only
+            // For column 9 RND button, let's draw it in Cyan for awesome visual premium identity!
+            if (col == 9 && !screen_glitch_active && !is_selected) {
+                fg = COLOR_CYAN;
+            }
+
+            display.draw_text(draw_x + (col == 9 ? 4 : 5), cell_y + 6, val_str, fg, bg, 1);
+            
+            // Draw corner markers if selected and glitch is done
+            if (is_selected && show_markers && !screen_glitch_active) {
+                draw_corner_markers(cell_x, cell_y, 26, 20, marker_scale, COLOR_CYAN);
+            }
+
+            // Draw column header label/icon at the top of Channel 1 only
             if (trk == 0) {
-                display.draw_text(cell_x + 6, trk_y - 12, column_headers[col - 1], COLOR_GREY, COLOR_BLACK, 1);
+                const uint8_t* icon_ptr = nullptr;
+                switch (col) {
+                    case 1: icon_ptr = icon_len_8x8; break;
+                    case 2: icon_ptr = icon_den_8x8; break;
+                    case 3: icon_ptr = icon_shf_8x8; break;
+                    case 4: icon_ptr = icon_mut_8x8; break;
+                    case 5: icon_ptr = icon_jit_8x8; break;
+                    case 6: icon_ptr = icon_gat_8x8; break;
+                    case 7: icon_ptr = icon_rot_8x8; break;
+                    case 8: icon_ptr = icon_scl_8x8; break;
+                    case 9: icon_ptr = icon_rnd_8x8; break;
+                }
+                
+                uint16_t header_icon_fg = screen_glitch_active ? COLOR_BLACK : COLOR_GREY;
+                if (col == 9 && !screen_glitch_active) {
+                    header_icon_fg = COLOR_CYAN; // Let RND icon shine in Cyan!
+                }
+                
+                if (icon_ptr) {
+                    draw_bitmap(cell_x + 9 + row_x_shift, trk_y - 12, 8, 8, icon_ptr, header_icon_fg, row_bg);
+                }
             }
         }
 
         // C. Expanded Visual Step Playhead Strip
         uint16_t steps_y = trk_y + 34;
-        display.fill_rect(45, steps_y, 268, 4, COLOR_BLACK);
+        display.fill_rect(44 + row_x_shift, steps_y, 266, 4, row_bg);
 
         uint8_t len = draw_params[trk].length;
         uint8_t curr = shared_current_step[trk];
         bool is_hit = shared_step_hit[trk];
 
-        uint16_t step_w = 264 / len;
+        uint16_t step_w = 262 / len;
         for (uint8_t s = 0; s < len; ++s) {
-            uint16_t sx = 45 + s * step_w;
+            uint16_t sx = 44 + s * step_w + row_x_shift;
             uint16_t sc;
             
-            if (is_muted) {
+            if (screen_glitch_active) {
+                sc = COLOR_BLACK;
+            } else if (is_muted) {
                 sc = (s == curr) ? COLOR_GREY : COLOR_DARK_GREY;
             } else {
                 sc = (s == curr) ? (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY) : COLOR_DARK_GREY;
@@ -632,7 +697,7 @@ int main() {
             if (cursor_col > 0) { cursor_col--; value_changed = true; }
         }
         if (input.is_pressed(KEY_RIGHT)) {
-            if (cursor_col < 8) { cursor_col++; value_changed = true; }
+            if (cursor_col < 9) { cursor_col++; value_changed = true; }
         }
 
         if (cursor_track != old_cursor_track || cursor_col != old_cursor_col) {
@@ -708,6 +773,20 @@ int main() {
                 case 6: p.gate = (p.gate + step_size <= 100) ? p.gate + step_size : 100; break;
                 case 7: p.root_note = (p.root_note + step_size <= 127) ? p.root_note + step_size : 127; break;
                 case 8: p.scale_type = (p.scale_type + 1 < SCALE_COUNT) ? p.scale_type + 1 : 0; break;
+                case 9: { // RND button - Mutate rhythm & pitch pattern!
+                    uint8_t len_options[] = {8, 12, 16, 24, 32};
+                    p.length = len_options[get_rand_32() % 5];
+                    p.density = static_cast<uint8_t>((get_rand_32() % (p.length / 2)) + 2);
+                    p.shift = static_cast<uint8_t>(get_rand_32() % p.length);
+                    p.mutation = static_cast<uint8_t>(get_rand_32() % 80);
+                    uint8_t spd_options[] = {3, 4, 6, 8, 12, 24};
+                    p.clock_divide = spd_options[get_rand_32() % 6];
+                    p.jitter = static_cast<uint8_t>(get_rand_32() % 40);
+                    p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
+                    tracks[cursor_track].randomize_pattern();
+                    screen_glitch_time = to_ms_since_boot(get_absolute_time());
+                    break;
+                }
             }
             
             shared_params[cursor_track] = p;
@@ -739,6 +818,20 @@ int main() {
                 case 6: p.gate = (p.gate - step_size >= 10) ? p.gate - step_size : 10; break;
                 case 7: p.root_note = (p.root_note - step_size >= 0) ? p.root_note - step_size : 0; break;
                 case 8: p.scale_type = (p.scale_type > 0) ? p.scale_type - 1 : SCALE_COUNT - 1; break;
+                case 9: { // RND button - Mutate rhythm & pitch pattern!
+                    uint8_t len_options[] = {8, 12, 16, 24, 32};
+                    p.length = len_options[get_rand_32() % 5];
+                    p.density = static_cast<uint8_t>((get_rand_32() % (p.length / 2)) + 2);
+                    p.shift = static_cast<uint8_t>(get_rand_32() % p.length);
+                    p.mutation = static_cast<uint8_t>(get_rand_32() % 80);
+                    uint8_t spd_options[] = {3, 4, 6, 8, 12, 24};
+                    p.clock_divide = spd_options[get_rand_32() % 6];
+                    p.jitter = static_cast<uint8_t>(get_rand_32() % 40);
+                    p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
+                    tracks[cursor_track].randomize_pattern();
+                    screen_glitch_time = to_ms_since_boot(get_absolute_time());
+                    break;
+                }
             }
             
             shared_params[cursor_track] = p;
@@ -747,6 +840,11 @@ int main() {
 
         // Keep redrawing during cursor movement animations for smooth 60fps glitch/snap-in playback
         if (to_ms_since_boot(get_absolute_time()) - cursor_move_time < 350) {
+            force_redraw = true;
+        }
+
+        // Keep redrawing during screen-wide glitch flashes
+        if (to_ms_since_boot(get_absolute_time()) - screen_glitch_time < 230) {
             force_redraw = true;
         }
 
