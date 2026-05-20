@@ -274,9 +274,211 @@ void draw_bitmap(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t* 
 }
 
 // Render Helper
-void draw_ui_dashboard() {
-    // Thread-safe parameters copying under spinlock to prevent torn reads during Core 0 drawing
-    TrackParams draw_params[4];
+// --- UI Differential Cache Table & Smooth Render Structures ---
+struct UICellCache {
+    uint8_t length = 0;
+    uint8_t density = 0;
+    uint8_t shift = 0;
+    uint8_t mutation = 0;
+    uint8_t jitter = 0;
+    uint8_t gate = 0;
+    uint8_t root_note = 0;
+    uint8_t scale_type = 0;
+    bool is_muted = false;
+    uint8_t clock_divide = 0;
+    bool is_focused = false;
+};
+
+static UICellCache cell_cache[4][10];
+static float cursor_visual_x = -1.0f;
+static float cursor_visual_y = -1.0f;
+static float cursor_last_drawn_x = -1.0f;
+static float cursor_last_drawn_y = -1.0f;
+static float cursor_last_drawn_w = -1.0f;
+static float cursor_last_drawn_h = -1.0f;
+
+// Thread-safe cached parameters for UI drawing
+static TrackParams draw_params[4];
+
+// Redraws a single focused or unfocused parameter cell instantly (Microseconds update!)
+void draw_single_cell(uint8_t trk, uint8_t col, bool is_selected) {
+    uint16_t trk_y = 66 + trk * 42;
+    uint16_t cell_y = trk_y + 4;
+    bool is_muted = draw_params[trk].is_muted;
+    uint16_t track_bg = COLOR_BLACK;
+
+    if (col == 0) {
+        // A. Speed Cell (X: 6, Y: trk_y + 14, W: 32, H: 18)
+        uint16_t cell_x = 6;
+        char spd_str[6];
+        uint8_t div = draw_params[trk].clock_divide;
+        if (div == 24) sprintf(spd_str, "x1");
+        else if (div == 12) sprintf(spd_str, "x2");
+        else if (div == 6)  sprintf(spd_str, "x4");
+        else if (div == 3)  sprintf(spd_str, "x8");
+        else if (div == 8)  sprintf(spd_str, "x3");
+        else if (div == 4)  sprintf(spd_str, "x6");
+        else if (div == 48) sprintf(spd_str, "/2");
+        else sprintf(spd_str, "/%d", div);
+
+        bool trk_hit = shared_step_hit[trk] && !is_muted;
+        uint16_t spd_bg = track_bg;
+        uint16_t spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
+
+        if (trk_hit) {
+            spd_bg = COLOR_WHITE;
+            spd_fg = COLOR_BLACK;
+        }
+
+        display.fill_rect(cell_x, trk_y + 14, 32, 18, spd_bg);
+        display.draw_text(cell_x, trk_y + 15, spd_str, spd_fg, spd_bg, 2);
+
+        // Draw selection frame directly if animation is inactive and cell is active
+        if (is_selected) {
+            display.draw_rect(cell_x, trk_y + 14, 32, 18, COLOR_CYAN);
+        }
+    } else {
+        // B. Standard Parameter Cell (X: 44 + (col-1)*30, Y: trk_y + 4, W: 26, H: 20)
+        uint16_t cell_x = 44 + (col - 1) * 30;
+        uint16_t bg = COLOR_BLACK;
+        uint16_t fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
+        uint16_t border_color = is_selected ? COLOR_CYAN : COLOR_DARK_GREY;
+
+        display.fill_rect(cell_x, cell_y, 26, 20, bg);
+        display.draw_rect(cell_x, cell_y, 26, 20, border_color);
+
+        char val_str[6] = "";
+        switch (col) {
+            case 1: sprintf(val_str, "%02d", draw_params[trk].length); break;
+            case 2: sprintf(val_str, "%02d", draw_params[trk].density); break;
+            case 3: sprintf(val_str, "%02d", draw_params[trk].shift); break;
+            case 4: sprintf(val_str, "%02d", draw_params[trk].mutation); break;
+            case 5: sprintf(val_str, "%02d", draw_params[trk].jitter); break;
+            case 6: sprintf(val_str, "%02d", draw_params[trk].gate); break;
+            case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
+            case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
+            case 9: sprintf(val_str, "RN"); break;
+        }
+
+        bool is_bold = false;
+        if (is_selected) {
+            fg = is_muted ? COLOR_GREY : COLOR_WHITE;
+            is_bold = true;
+        } else {
+            switch (col) {
+                case 1: case 2: case 4:
+                    fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
+                    is_bold = true;
+                    break;
+                case 9:
+                    fg = COLOR_CYAN;
+                    is_bold = true;
+                    break;
+                default:
+                    fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
+                    is_bold = false;
+                    break;
+            }
+        }
+
+        uint8_t text_x_offset = 4;
+        display.draw_text(cell_x + text_x_offset, cell_y + 6, val_str, fg, bg, 1);
+        if (is_bold) {
+            display.draw_text(cell_x + text_x_offset + 1, cell_y + 6, val_str, fg, bg, 1);
+        }
+    }
+}
+
+// Redraws the 266x4 step sequencer lane for a single track efficiently (differential update!)
+void draw_track_steps(uint8_t trk, bool force) {
+    uint16_t trk_y = 66 + trk * 42;
+    uint16_t steps_y = trk_y + 32;
+
+    static uint8_t last_step[4] = {255, 255, 255, 255};
+    static uint8_t last_len[4] = {0, 0, 0, 0};
+    static uint8_t last_density[4] = {255, 255, 255, 255};
+    static uint8_t last_shift[4] = {255, 255, 255, 255};
+    static bool last_muted[4] = {false, false, false, false};
+
+    uint8_t len = draw_params[trk].length;
+    uint8_t curr = shared_current_step[trk];
+    uint8_t den = draw_params[trk].density;
+    uint8_t shf = draw_params[trk].shift;
+    bool muted = draw_params[trk].is_muted;
+    bool is_hit = shared_step_hit[trk];
+
+    if (len == 0) return;
+    uint16_t step_w = 262 / len;
+
+    // Check if parameters of the sequencer lane have changed
+    bool lane_changed = (len != last_len[trk]) || (den != last_density[trk]) || (shf != last_shift[trk]) || (muted != last_muted[trk]);
+
+    if (force || lane_changed) {
+        // Redraw whole step sequencer lane only on structural changes (length, density shift)
+        display.fill_rect(44, steps_y, 266, 4, COLOR_BLACK);
+        display.fill_rect(44, steps_y + 1, 266, 2, COLOR_DARK_GREY);
+
+        for (uint8_t s = 0; s < len; ++s) {
+            uint16_t sx = 44 + s * step_w;
+            uint16_t sc;
+            EuclideanGenerator rhythm_calc;
+            bool is_active_beat = rhythm_calc.calculate_step(s, len, den, shf);
+
+            if (s == curr) {
+                sc = muted ? COLOR_GREY : (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY);
+            } else {
+                if (is_active_beat) {
+                    sc = muted ? COLOR_DARK_GREY : COLOR_CYAN;
+                } else {
+                    sc = COLOR_DARK_GREY;
+                }
+            }
+
+            uint16_t sh = (s == curr) ? 4 : (is_active_beat ? 3 : 2);
+            uint16_t sy = (s == curr) ? steps_y : (steps_y + 1);
+            display.fill_rect(sx, sy, step_w - 1, sh, sc);
+        }
+
+        last_len[trk] = len;
+        last_density[trk] = den;
+        last_shift[trk] = shf;
+        last_muted[trk] = muted;
+        last_step[trk] = curr;
+    } else if (curr != last_step[trk] || is_hit) {
+        // Silky Differential Step updates! Only redraw the PREVIOUS step and the CURRENT step!
+        // This cuts down SPI load by 95%!
+        uint8_t prev = last_step[trk];
+        EuclideanGenerator rhythm_calc;
+
+        // 1. Redraw previous step to its original resting state
+        if (prev < len) {
+            uint16_t sx = 44 + prev * step_w;
+            bool is_active_beat = rhythm_calc.calculate_step(prev, len, den, shf);
+            uint16_t sc = is_active_beat ? (muted ? COLOR_DARK_GREY : COLOR_CYAN) : COLOR_DARK_GREY;
+            uint16_t sh = is_active_beat ? 3 : 2;
+            
+            // Clear step column first
+            display.fill_rect(sx, steps_y, step_w - 1, 4, COLOR_BLACK);
+            display.fill_rect(sx, steps_y + 1, step_w - 1, 2, COLOR_DARK_GREY);
+            display.fill_rect(sx, steps_y + 1, step_w - 1, sh, sc);
+        }
+
+        // 2. Draw current active playhead step
+        if (curr < len) {
+            uint16_t sx = 44 + curr * step_w;
+            uint16_t sc = muted ? COLOR_GREY : (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY);
+            
+            display.fill_rect(sx, steps_y, step_w - 1, 4, COLOR_BLACK);
+            display.fill_rect(sx, steps_y, step_w - 1, 4, sc);
+        }
+
+        last_step[trk] = curr;
+    }
+}
+
+// Differential rendering orchestrator - strictly partial drawing (Dirty Rect)
+void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, bool is_animating) {
+    // Thread-safe parameters copying under spinlock
     uint32_t lock_save = lock_shared_params();
     for (int i = 0; i < 4; ++i) {
         draw_params[i] = shared_params[i];
@@ -284,32 +486,10 @@ void draw_ui_dashboard() {
     unlock_shared_params(lock_save);
 
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    uint16_t cursor_color = COLOR_CYAN;
-
-    // Static clean system loads
-    float engine_load = 18.0f;
-    float ui_load = 22.0f;
-
-    bool glitch_active = false;
-    uint16_t glitch_bg = COLOR_BLACK;
-    int16_t glitch_x_offset = 0;
-    float marker_scale = 1.0f;
-    bool show_markers = true;
-
-    bool screen_glitch_active = false;
-    uint16_t screen_glitch_bg = COLOR_BLACK;
-    int16_t screen_glitch_x_offset = 0;
 
     // ----------------------------------------------------
-    // 1. Draw Full-Width Header Area (Y: 0 to 48)
+    // 1. Render Header Area (Only on state changes)
     // ----------------------------------------------------
-    int16_t header_x_shift = screen_glitch_active ? screen_glitch_x_offset : 0;
-    uint16_t header_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
-    uint16_t header_fg = screen_glitch_active ? COLOR_BLACK : COLOR_WHITE;
-    uint16_t header_lbl_color = screen_glitch_active ? COLOR_BLACK : COLOR_GREY;
-    uint16_t header_sub_color = screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY;
-
-    // --- Header Flicker Optimization & Partial Updates ---
     static bool last_master_flash = false;
     static int last_disk_save_state = -1;
     static bool last_sequencer_playing = false;
@@ -322,7 +502,7 @@ void draw_ui_dashboard() {
     uint8_t current_scale_idx = draw_params[cursor_track].scale_type;
     if (current_scale_idx >= 5) current_scale_idx = 0;
 
-    bool header_needs_update = force_redraw || screen_glitch_active ||
+    bool header_needs_update = force_redraw || 
                                (master_flash != last_master_flash) ||
                                (disk_save_state != last_disk_save_state) ||
                                (sequencer_playing != last_sequencer_playing) ||
@@ -340,82 +520,67 @@ void draw_ui_dashboard() {
         last_cursor_track = cursor_track;
         if (now - last_cpu_draw_time > 1000) last_cpu_draw_time = now;
 
-        // Only fill the entire header background during glitches or forced/initial redraws
-        // to prevent heavy SPI bus flooding and extreme human-visible screen flickering
-        if (screen_glitch_active || force_redraw) {
-            display.fill_rect(0, 0, 320, 48, header_bg);
+        if (force_redraw) {
+            display.fill_rect(0, 0, 320, 48, COLOR_BLACK);
         }
         
-        // Vertical BPM Label (Vaporwave Faux-Bold!) - Realigned Downward
-        display.draw_text(8 + header_x_shift, 11, "B", header_lbl_color, header_bg, 1);
-        display.draw_text(8 + header_x_shift + 1, 11, "B", header_lbl_color, header_bg, 1);
-        display.draw_text(8 + header_x_shift, 21, "P", header_lbl_color, header_bg, 1);
-        display.draw_text(8 + header_x_shift + 1, 21, "P", header_lbl_color, header_bg, 1);
-        display.draw_text(8 + header_x_shift, 31, "M", header_lbl_color, header_bg, 1);
-        display.draw_text(8 + header_x_shift + 1, 31, "M", header_lbl_color, header_bg, 1);
+        // Vertical BPM Label
+        display.draw_text(8, 11, "B", COLOR_GREY, COLOR_BLACK, 1);
+        display.draw_text(9, 11, "B", COLOR_GREY, COLOR_BLACK, 1);
+        display.draw_text(8, 21, "P", COLOR_GREY, COLOR_BLACK, 1);
+        display.draw_text(9, 21, "P", COLOR_GREY, COLOR_BLACK, 1);
+        display.draw_text(8, 31, "M", COLOR_GREY, COLOR_BLACK, 1);
+        display.draw_text(9, 31, "M", COLOR_GREY, COLOR_BLACK, 1);
 
-        // Master Clock Flashing Check
-        uint16_t bpm_bg = screen_glitch_active ? screen_glitch_bg : (master_flash ? COLOR_WHITE : COLOR_BLACK);
-        uint16_t bpm_fg = screen_glitch_active ? COLOR_BLACK : (master_flash ? COLOR_BLACK : COLOR_WHITE);
+        uint16_t bpm_bg = master_flash ? COLOR_WHITE : COLOR_BLACK;
+        uint16_t bpm_fg = master_flash ? COLOR_BLACK : COLOR_WHITE;
 
-        // Draw solid backplate for master clock text to enable smooth inversion flashing
-        display.fill_rect(16 + header_x_shift, 8, 62, 32, bpm_bg);
+        display.fill_rect(16, 8, 62, 32, bpm_bg);
 
-        // Render large 16x24 bold digits for the actual BPM
         char bpm_str[8];
         sprintf(bpm_str, "%03d", shared_bpm);
         for (int i = 0; i < 3; ++i) {
             uint8_t digit = bpm_str[i] - '0';
-            draw_bitmap(20 + i * 18 + header_x_shift, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
+            draw_bitmap(20 + i * 18, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
         }
 
-        // ----------------------------------------------------
-        // General Settings Panel (Left-Shifted Layout after removing CPU/Debug)
-        // ----------------------------------------------------
-        
-        // Vertical Separator (Moved left to X: 90)
-        display.fill_rect(90 + header_x_shift, 6, 1, 36, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
+        display.fill_rect(90, 6, 1, 36, COLOR_DARK_GREY);
 
-        // State 1: Playback State Capsule/Pill Container (OLED-style Neon Green pop when active)
-        uint16_t pill_bg = screen_glitch_active ? screen_glitch_bg : (sequencer_playing ? 0x03E0 : COLOR_BLACK); 
-        uint16_t pill_fg = screen_glitch_active ? COLOR_BLACK : (sequencer_playing ? COLOR_BLACK : COLOR_LIGHT_GREY);
-        display.fill_rect(96 + header_x_shift, 12, 58, 24, pill_bg);
-        if (!screen_glitch_active && !sequencer_playing) {
-            display.draw_rect(96 + header_x_shift, 12, 58, 24, COLOR_DARK_GREY); // grey border
+        // Play/Pause Capsule
+        uint16_t pill_bg = sequencer_playing ? 0x03E0 : COLOR_BLACK; 
+        uint16_t pill_fg = sequencer_playing ? COLOR_BLACK : COLOR_LIGHT_GREY;
+        display.fill_rect(96, 12, 58, 24, pill_bg);
+        if (!sequencer_playing) {
+            display.draw_rect(96, 12, 58, 24, COLOR_DARK_GREY);
         }
         
-        draw_bitmap(98 + header_x_shift, 16, 16, 16, icon_play_pause_16x16, pill_fg, pill_bg);
-        display.draw_text(118 + header_x_shift, 20, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
+        draw_bitmap(98, 16, 16, 16, icon_play_pause_16x16, pill_fg, pill_bg);
+        display.draw_text(118, 20, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
 
-        // State 2: Active Track Scale Mode Capsule (Monochrome OLED)
+        // Scale Capsule
         const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
         char scale_lbl[16];
         sprintf(scale_lbl, "SCL:%s", scale_names[current_scale_idx]);
         
-        uint16_t scale_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK; 
-        display.fill_rect(162 + header_x_shift, 12, 112, 24, scale_bg);
-        if (!screen_glitch_active) {
-            display.draw_rect(162 + header_x_shift, 12, 112, 24, COLOR_DARK_GREY); // Clean grey border
-        }
+        uint16_t scale_bg = COLOR_BLACK; 
+        display.fill_rect(162, 12, 112, 24, scale_bg);
+        display.draw_rect(162, 12, 112, 24, COLOR_DARK_GREY);
         
-        draw_bitmap(168 + header_x_shift, 16, 16, 16, icon_note_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_LIGHT_GREY, scale_bg);
-        display.draw_text(188 + header_x_shift, 20, scale_lbl, screen_glitch_active ? COLOR_BLACK : COLOR_WHITE, scale_bg, 1);
+        draw_bitmap(168, 16, 16, 16, icon_note_16x16, COLOR_LIGHT_GREY, scale_bg);
+        display.draw_text(188, 20, scale_lbl, COLOR_WHITE, scale_bg, 1);
 
-        // State 3: Storage Safe Command Save Capsule using floppy disk (Icon-Only Mini-Capsule!)
-        uint16_t disk_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
-        uint8_t disk_y_offset = (disk_save_state > 0) ? 1 : 0; // slide down slightly on write!
-        display.fill_rect(284 + header_x_shift, 12, 30, 24, disk_bg);
+        // Save Capsule
+        uint16_t disk_bg = COLOR_BLACK;
+        uint8_t disk_y_offset = (disk_save_state > 0) ? 1 : 0;
+        display.fill_rect(284, 12, 30, 24, disk_bg);
         
-        if (!screen_glitch_active) {
-            // Flash border when writing or saved!
-            uint16_t current_disk_border = COLOR_DARK_GREY;
-            if (disk_save_state == 1 || disk_save_state == 2) {
-                current_disk_border = COLOR_MAGENTA; // Flashing Magenta write outline!
-            } else if (disk_save_state == 3) {
-                current_disk_border = COLOR_CYAN;    // Glowing Cyan save success outline!
-            }
-            display.draw_rect(284 + header_x_shift, 12, 30, 24, current_disk_border);
+        uint16_t current_disk_border = COLOR_DARK_GREY;
+        if (disk_save_state == 1 || disk_save_state == 2) {
+            current_disk_border = COLOR_MAGENTA;
+        } else if (disk_save_state == 3) {
+            current_disk_border = COLOR_CYAN;
         }
+        display.draw_rect(284, 12, 30, 24, current_disk_border);
         
         uint16_t disk_icon_fg = COLOR_LIGHT_GREY;
         if (disk_save_state == 1 || disk_save_state == 2) {
@@ -424,180 +589,113 @@ void draw_ui_dashboard() {
             disk_icon_fg = COLOR_CYAN;
         }
         
-        draw_bitmap(291 + header_x_shift, 16 + disk_y_offset, 16, 16, icon_save_16x16, screen_glitch_active ? COLOR_BLACK : disk_icon_fg, disk_bg);
+        draw_bitmap(291, 16 + disk_y_offset, 16, 16, icon_save_16x16, disk_icon_fg, disk_bg);
 
-        // Clean bottom divider line for full-width header
-        display.fill_rect(0, 47, 320, 1, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY);
+        // Divider
+        display.fill_rect(0, 47, 320, 1, COLOR_DARK_GREY);
     }
 
     // ----------------------------------------------------
-    // 2. Draw 4 Track/Channel Strips (Y: 66 to 234, 42px each)
+    // 2. Render Track Static Side Elements (Once or on Redraw)
     // ----------------------------------------------------
-    for (int trk = 0; trk < 4; ++trk) {
-        uint16_t trk_y = 66 + trk * 42;
-        bool is_muted = draw_params[trk].is_muted;
-        bool is_active_track = (cursor_track == trk);
+    if (force_redraw) {
+        for (int trk = 0; trk < 4; ++trk) {
+            uint16_t trk_y = 66 + trk * 42;
+            bool is_muted = draw_params[trk].is_muted;
 
-        int16_t row_x_shift = screen_glitch_active ? screen_glitch_x_offset : 0;
-        uint16_t track_bg = COLOR_BLACK; // pure OLED black contrast!
-        uint16_t row_bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK;
+            display.draw_text(6, trk_y + 6, is_muted ? "MUT" : "CH", is_muted ? COLOR_DARK_GREY : COLOR_GREY, COLOR_BLACK, 1);
+            char trk_num_str[2] = { (char)('1' + trk), '\0' };
+            uint16_t trk_num_color = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
+            display.draw_text(24, trk_y + 6, trk_num_str, trk_num_color, COLOR_BLACK, 1);
+            display.draw_text(25, trk_y + 6, trk_num_str, trk_num_color, COLOR_BLACK, 1); // Faux bold
 
-        // Elektron-style active track indication (No explicit lines, keeping pure borderless OLED layout!)
-
-        // A. Left Column: CH ID and Speed Indicator (Large bold Elektron OLED track digit!)
-        display.draw_text(6 + row_x_shift, trk_y + 6, is_muted ? "MUT" : "CH", screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_GREY), track_bg, 1);
-        
-        char trk_num_str[2] = { (char)('1' + trk), '\0' };
-        uint16_t trk_num_color = screen_glitch_active ? COLOR_BLACK : (is_muted ? COLOR_DARK_GREY : COLOR_WHITE);
-        display.draw_text(24 + row_x_shift, trk_y + 6, trk_num_str, trk_num_color, track_bg, 1);
-        display.draw_text(24 + row_x_shift + 1, trk_y + 6, trk_num_str, trk_num_color, track_bg, 1); // faux bold
-
-
-
-        if (is_muted) {
-            // Draw Speaker Mute 16x16 icon in place of speed or next to it
-            draw_bitmap(24 + row_x_shift, trk_y + 14, 16, 16, icon_mute_16x16, screen_glitch_active ? COLOR_BLACK : COLOR_DARK_GREY, track_bg);
-        }
-
-        // Format Clock Divide into speed multiplication factor (large bold size 2)
-        char spd_str[6];
-        uint8_t div = draw_params[trk].clock_divide;
-        if (div == 24) sprintf(spd_str, "x1");
-        else if (div == 12) sprintf(spd_str, "x2");
-        else if (div == 6)  sprintf(spd_str, "x4");
-        else if (div == 3)  sprintf(spd_str, "x8");
-        else if (div == 8)  sprintf(spd_str, "x3");
-        else if (div == 4)  sprintf(spd_str, "x6");
-        else if (div == 48) sprintf(spd_str, "/2");
-        else sprintf(spd_str, "/%d", div);
-
-        // Inversion/flash logic for the speed multiplier
-        bool speed_selected = (cursor_track == trk && cursor_col == 0);
-        bool trk_hit = shared_step_hit[trk] && !is_muted;
-        
-        uint16_t spd_bg = track_bg;
-        uint16_t spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
-        int16_t spd_draw_x = 6 + row_x_shift;
-
-        if (screen_glitch_active) {
-            spd_bg = screen_glitch_bg;
-            spd_fg = COLOR_BLACK;
-        } else if (speed_selected) {
-            if (glitch_active) {
-                spd_bg = glitch_bg;
-                spd_fg = COLOR_BLACK;
-                spd_draw_x = 6 + glitch_x_offset;
-            } else {
-                // Normal selection: trigger hit flashes white, otherwise black background
-                if (trk_hit) {
-                    spd_bg = COLOR_WHITE;
-                    spd_fg = COLOR_BLACK;
-                } else {
-                    spd_bg = COLOR_BLACK;
-                    spd_fg = is_muted ? COLOR_GREY : COLOR_WHITE;
-                }
-            }
-        } else {
-            // Unselected: trigger hit flashes white, otherwise standard track background
-            if (trk_hit) {
-                spd_bg = COLOR_WHITE;
-                spd_fg = COLOR_BLACK;
-            } else {
-                spd_bg = track_bg;
-                spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
+            if (is_muted) {
+                draw_bitmap(24, trk_y + 14, 16, 16, icon_mute_16x16, COLOR_DARK_GREY, COLOR_BLACK);
             }
         }
+    }
 
-        // Render Speed in Size 2 (Large bold geometric view - Maximum Left-Aligned!)
-        display.fill_rect(spd_draw_x, trk_y + 14, 32, 18, spd_bg);
-        display.draw_text(spd_draw_x, trk_y + 15, spd_str, spd_fg, spd_bg, 2);
-
-        // Render pure monochrome cursor border if speed cell is active
-        if (speed_selected) {
-            display.draw_rect(spd_draw_x, trk_y + 14, 32, 18, cursor_color);
-        }
-
-        // Vertical boundary dividing Channel speed and parameter grid (Removed for pure borderless flat OLED look!)
-
-        // B. Right Column: Expanded Parameter Grid Cells (Col 1 to 9 starts at X: 44)
-        for (int col = 1; col <= 9; ++col) {
-            uint16_t cell_x = 44 + (col - 1) * 30;
-            uint16_t cell_y = trk_y + 4;
-
-            bool is_selected = (cursor_track == trk && cursor_col == col);
-            uint16_t bg = screen_glitch_active ? screen_glitch_bg : COLOR_BLACK; // pure OLED black cell background!
-            uint16_t fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
-            uint16_t border_color = screen_glitch_active ? COLOR_BLACK : (is_selected ? cursor_color : COLOR_DARK_GREY);
-            int16_t draw_x = cell_x + row_x_shift;
-
-            if (screen_glitch_active) {
-                bg = screen_glitch_bg;
-                fg = COLOR_BLACK;
-            } else if (is_selected) {
-                if (glitch_active) {
-                    bg = glitch_bg;
-                    fg = COLOR_BLACK;
-                    draw_x = (int16_t)cell_x + glitch_x_offset;
-                } else {
-                    bg = COLOR_BLACK;
-                    fg = is_muted ? COLOR_GREY : COLOR_WHITE;
-                }
+    // ----------------------------------------------------
+    // 3. Differential Parameter Cell Render (Dirty check)
+    // ----------------------------------------------------
+    static uint8_t last_cursor_track = 255;
+    static uint8_t last_cursor_col = 255;
+    
+    // Clear old visual cursor box before checking cell values
+    if (is_animating || force_redraw) {
+        // Redraw cells intersecting the last drawn visual cursor bounding box
+        // to erase the old cyan visual border trace perfectly!
+        if (cursor_last_drawn_x >= 0) {
+            // Find which cells the last drawn cursor frame was overlapping
+            // To be robust and super fast: redraw the previous focus target and the current focus target!
+            if (last_cursor_track < 4 && last_cursor_col < 10) {
+                draw_single_cell(last_cursor_track, last_cursor_col, false);
             }
-
-            // Draw parameter cell box (width 26, height 20) with clean monochrome borders
-            display.fill_rect(draw_x, cell_y, 26, 20, bg);
-            display.draw_rect(draw_x, cell_y, 26, 20, border_color);
-
-            char val_str[6] = "";
-            switch (col) {
-                case 1: sprintf(val_str, "%02d", draw_params[trk].length); break;
-                case 2: sprintf(val_str, "%02d", draw_params[trk].density); break;
-                case 3: sprintf(val_str, "%02d", draw_params[trk].shift); break;
-                case 4: sprintf(val_str, "%02d", draw_params[trk].mutation); break;
-                case 5: sprintf(val_str, "%02d", draw_params[trk].jitter); break;
-                case 6: sprintf(val_str, "%02d", draw_params[trk].gate); break;
-                case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
-                case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
-                case 9: sprintf(val_str, "RN"); break;
-            }
-
-            // High-Contrast Monochrome hierarchy with Faux-Bold highlights and sudden Neon Cyan pop
-            bool is_bold = false;
-            if (screen_glitch_active) {
-                fg = COLOR_BLACK;
-            } else if (is_selected) {
-                fg = is_muted ? COLOR_GREY : COLOR_WHITE;
-                is_bold = true; // Focused cell value is always bold white!
-            } else {
-                switch (col) {
-                    case 1: // LEN (High importance)
-                    case 2: // DEN (High importance)
-                    case 4: // MUT (High importance)
-                        fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE; // Bold stark white!
-                        is_bold = true;
-                        break;
-                    case 9: // RND (Sudden performative neon pop!)
-                        fg = COLOR_CYAN; // Blazing Neon Cyan!
-                        is_bold = true;
-                        break;
-                    default: // SHF, JIT, GAT, ROT, SCL (Secondary modifiers in monochrome grays)
-                        fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
-                        is_bold = false;
-                        break;
-                }
-            }
-
-            // Render value with or without faux-bolding weight (Precision Centering unified at X offset: 4)
-            uint8_t text_x_offset = 4;
-            display.draw_text(draw_x + text_x_offset, cell_y + 6, val_str, fg, bg, 1);
-            if (is_bold && !screen_glitch_active) {
-                display.draw_text(draw_x + text_x_offset + 1, cell_y + 6, val_str, fg, bg, 1); // Faux-bold overlay
+            if (cursor_track < 4 && cursor_col < 10) {
+                draw_single_cell(cursor_track, cursor_col, (cursor_track == cursor_track && cursor_col == cursor_col && !is_animating));
             }
             
-            // Simple border highlight already drawn in line 517
+            // Clean boundary redraw in physical pixels surrounding the old visual cursor bounds
+            display.draw_rect(cursor_last_drawn_x, cursor_last_drawn_y, cursor_last_drawn_w, cursor_last_drawn_h, COLOR_BLACK);
+        }
+    }
 
-            // Draw column header label/icon at the top of Channel 1 only
-            if (trk == 0) {
+    for (int trk = 0; trk < 4; ++trk) {
+        bool is_muted = draw_params[trk].is_muted;
+        
+        for (int col = 0; col < 10; ++col) {
+            uint16_t cell_y = 66 + trk * 42 + 4;
+            
+            // Gather state properties
+            uint8_t len = draw_params[trk].length;
+            uint8_t den = draw_params[trk].density;
+            uint8_t shf = draw_params[trk].shift;
+            uint8_t mut = draw_params[trk].mutation;
+            uint8_t jit = draw_params[trk].jitter;
+            uint8_t gat = draw_params[trk].gate;
+            uint8_t rot = draw_params[trk].root_note;
+            uint8_t scl = draw_params[trk].scale_type;
+            uint8_t div = draw_params[trk].clock_divide;
+            bool selected = (cursor_track == trk && cursor_col == col);
+            bool trk_hit = shared_step_hit[trk] && !is_muted;
+
+            UICellCache& cache = cell_cache[trk][col];
+
+            // Perform differential cache dirty check
+            bool dirty = force_redraw ||
+                         (cache.length != len) ||
+                         (cache.density != den) ||
+                         (cache.shift != shf) ||
+                         (cache.mutation != mut) ||
+                         (cache.jitter != jit) ||
+                         (cache.gate != gat) ||
+                         (cache.root_note != rot) ||
+                         (cache.scale_type != scl) ||
+                         (cache.is_muted != is_muted) ||
+                         (cache.clock_divide != div) ||
+                         (col == 0 && trk_hit) || // Force speed cell update on real-time MIDI flash hits!
+                         (cache.is_focused != selected && !is_animating); // Only update selection static focus border if not actively sliding
+
+            if (dirty) {
+                draw_single_cell(trk, col, selected && !is_animating);
+
+                // Populate cache
+                cache.length = len;
+                cache.density = den;
+                cache.shift = shf;
+                cache.mutation = mut;
+                cache.jitter = jit;
+                cache.gate = gat;
+                cache.root_note = rot;
+                cache.scale_type = scl;
+                cache.is_muted = is_muted;
+                cache.clock_divide = div;
+                cache.is_focused = selected;
+            }
+
+            // Draw header icon indicators above track 0 cells
+            if (trk == 0 && force_redraw) {
+                uint16_t cell_x = 44 + (col - 1) * 30;
                 const uint8_t* icon_ptr = nullptr;
                 switch (col) {
                     case 1: icon_ptr = icon_len_8x8; break;
@@ -611,64 +709,39 @@ void draw_ui_dashboard() {
                     case 9: icon_ptr = icon_rnd_8x8; break;
                 }
                 
-                uint16_t header_icon_fg = screen_glitch_active ? COLOR_BLACK : COLOR_GREY;
-                if (col == 9 && !screen_glitch_active) {
-                    header_icon_fg = COLOR_CYAN; // Let RND icon shine in Cyan!
-                }
+                uint16_t header_icon_fg = COLOR_GREY;
+                if (col == 9) header_icon_fg = COLOR_CYAN;
                 
                 if (icon_ptr) {
-                    draw_bitmap(cell_x + 5 + row_x_shift, trk_y - 14, 16, 16, icon_ptr, header_icon_fg, row_bg);
+                    draw_bitmap(cell_x + 5, 66 - 14, 16, 16, icon_ptr, header_icon_fg, COLOR_BLACK);
                 }
             }
         }
 
-        // C. Expanded Visual Step Playhead Strip (HD 3D-feeling sequencer track)
-        uint16_t steps_y = trk_y + 32;
-        display.fill_rect(44 + row_x_shift, steps_y, 266, 4, row_bg);
-        
-        // Draw slot track lane
-        if (!screen_glitch_active) {
-            display.fill_rect(44 + row_x_shift, steps_y + 1, 266, 2, COLOR_DARK_GREY); // monochrome OLED slot lane
-        }
-
-        uint8_t len = draw_params[trk].length;
-        uint8_t curr = shared_current_step[trk];
-        bool is_hit = shared_step_hit[trk];
-
-        uint16_t step_w = 262 / len;
-        for (uint8_t s = 0; s < len; ++s) {
-            uint16_t sx = 44 + s * step_w + row_x_shift;
-            uint16_t sc;
-            
-            EuclideanGenerator rhythm_calc;
-            bool is_active_beat = rhythm_calc.calculate_step(s, len, draw_params[trk].density, draw_params[trk].shift);
-
-            if (screen_glitch_active) {
-                sc = COLOR_BLACK;
-            } else if (s == curr) {
-                sc = is_muted ? COLOR_GREY : (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY);
-            } else {
-                if (is_active_beat) {
-                    sc = is_muted ? COLOR_DARK_GREY : COLOR_CYAN; // Glow in beautiful Neon Cyan!
-                } else {
-                    sc = COLOR_DARK_GREY;
-                }
-            }
-            
-            // Render active steps as 3D taller blocks to create dynamic rhythm hills
-            uint16_t sh = 2; // step height
-            uint16_t sy = steps_y + 1;
-            if (s == curr && !screen_glitch_active) {
-                sh = 4; // active playhead block pops up!
-                sy = steps_y;
-            } else if (is_active_beat && !screen_glitch_active) {
-                sh = 3; // scheduled beat block is slightly elevated!
-                sy = steps_y + 1;
-            }
-            display.fill_rect(sx, sy, step_w - 1, sh, sc);
-        }
+        // ----------------------------------------------------
+        // 4. Render Step Sequencer Playheads (Dirty Update)
+        // ----------------------------------------------------
+        draw_track_steps(trk, force_redraw);
     }
+
+    // ----------------------------------------------------
+    // 5. Draw Silky Smooth Eased Visual Cursor Box (Only if active or forced!)
+    // ----------------------------------------------------
+    if (is_animating || !is_animating) {
+        // Draw the visual eased outline in Neon Cyan directly over the grid!
+        display.draw_rect((uint16_t)cur_x, (uint16_t)cur_y, (uint16_t)cur_w, (uint16_t)cur_h, COLOR_CYAN);
+        
+        // Cache the drawn bounds to clean them perfectly on the next frame update
+        cursor_last_drawn_x = cur_x;
+        cursor_last_drawn_y = cur_y;
+        cursor_last_drawn_w = cur_w;
+        cursor_last_drawn_h = cur_h;
+    }
+
+    last_cursor_track = cursor_track;
+    last_cursor_col = cursor_col;
 }
+
 
 // Core 1 Entry Point (Realtime MIDI and Generative Engine)
 void core1_entry() {
@@ -1014,12 +1087,64 @@ int main() {
             unlock_shared_params(lock_save);
         }
 
-        // Draw UI dashboard
-        if (value_changed || force_redraw || sequencer_playing) {
-            draw_ui_dashboard();
+        // ----------------------------------------------------
+        // Smooth Visual Cursor Animation & Differential Update Execution
+        // ----------------------------------------------------
+        bool is_animating = false;
+        float target_x = 0;
+        float target_y = 66 + cursor_track * 42 + 4;
+        float target_w = 0;
+        float target_h = 0;
+
+        if (cursor_col == 0) {
+            target_x = 6;
+            target_y = 66 + cursor_track * 42 + 14; // Speed cells are shifted down
+            target_w = 32;
+            target_h = 18;
+        } else {
+            target_x = 44 + (cursor_col - 1) * 30;
+            target_w = 26;
+            target_h = 20;
+        }
+
+        static float cursor_visual_w = -1.0f;
+        static float cursor_visual_h = -1.0f;
+
+        if (cursor_visual_x < 0) {
+            // First run snap
+            cursor_visual_x = target_x;
+            cursor_visual_y = target_y;
+            cursor_visual_w = target_w;
+            cursor_visual_h = target_h;
+        } else {
+            // Exponential smoothing (LERP ease-out)
+            float dx = target_x - cursor_visual_x;
+            float dy = target_y - cursor_visual_y;
+            float dw = target_w - cursor_visual_w;
+            float dh = target_h - cursor_visual_h;
+
+            if (std::abs(dx) > 0.05f || std::abs(dy) > 0.05f || std::abs(dw) > 0.05f || std::abs(dh) > 0.05f) {
+                cursor_visual_x += dx * 0.35f;
+                cursor_visual_y += dy * 0.35f;
+                cursor_visual_w += dw * 0.35f;
+                cursor_visual_h += dh * 0.35f;
+                is_animating = true;
+            } else {
+                cursor_visual_x = target_x;
+                cursor_visual_y = target_y;
+                cursor_visual_w = target_w;
+                cursor_visual_h = target_h;
+            }
+        }
+
+        // Render differential changes under extreme speed optimizations
+        if (value_changed || force_redraw || sequencer_playing || is_animating) {
+            update_ui_dashboard(cursor_visual_x, cursor_visual_y, cursor_visual_w, cursor_visual_h, is_animating);
+            value_changed = false;
             force_redraw = false;
         } else {
-            sleep_ms(10); // Sleep only on idle frames to keep inputs ultra-responsive and latency-free!
+            // Dynamic idle drop to save CPU load entirely while keeping edge detection responsive!
+            sleep_ms(10); 
         }
     }
     
