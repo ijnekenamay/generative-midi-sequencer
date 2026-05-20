@@ -581,12 +581,12 @@ int main() {
                 if (!key_was_held[key]) {
                     // Initial instant trigger!
                     press_action();
-                    key_repeat_timers[key] = now + 180; // Sharp 180ms hold delay!
+                    key_repeat_timers[key] = now + 120; // Sharp 120ms hold delay (more sensitive)
                     key_was_held[key] = true;
                 } else if (now >= key_repeat_timers[key]) {
                     // Repeat trigger!
                     press_action();
-                    key_repeat_timers[key] = now + 50; // Super-fast 50ms repeat rate!
+                    key_repeat_timers[key] = now + 40; // Super-fast 40ms repeat rate!
                 }
             } else {
                 key_was_held[key] = false;
@@ -657,7 +657,7 @@ int main() {
         // Handle parameter modifications (A: INC, B: DEC)
         int8_t step_size = input.is_shift_active() ? 10 : 1;
 
-        if (input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A)) {
+        handle_nav_key(KEY_A, [&]() {
             value_changed = true;
             
             uint32_t lock_save = lock_shared_params();
@@ -700,9 +700,9 @@ int main() {
             
             shared_params[cursor_track] = p;
             unlock_shared_params(lock_save);
-        }
+        });
 
-        if (input.is_pressed(KEY_B) || input.is_long_pressed(KEY_B)) {
+        handle_nav_key(KEY_B, [&]() {
             value_changed = true;
             
             uint32_t lock_save = lock_shared_params();
@@ -744,7 +744,7 @@ int main() {
             
             shared_params[cursor_track] = p;
             unlock_shared_params(lock_save);
-        }
+        });
 
         // ----------------------------------------------------
         // Render differential changes under extreme speed optimizations
