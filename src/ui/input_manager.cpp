@@ -101,3 +101,36 @@ bool InputManager::is_long_pressed(KeyIndex key) const {
     }
     return false;
 }
+
+void InputManager::lv_keypad_read_cb(lv_indev_t * indev, lv_indev_data_t * data) {
+    InputManager* manager = (InputManager*)lv_indev_get_user_data(indev);
+    if (!manager) return;
+
+    data->state = LV_INDEV_STATE_RELEASED;
+
+    if (manager->is_held(KEY_UP)) {
+        data->key = LV_KEY_UP;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else if (manager->is_held(KEY_DOWN)) {
+        data->key = LV_KEY_DOWN;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else if (manager->is_held(KEY_LEFT)) {
+        data->key = LV_KEY_LEFT;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else if (manager->is_held(KEY_RIGHT)) {
+        data->key = LV_KEY_RIGHT;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else if (manager->is_held(KEY_A)) {
+        data->key = LV_KEY_ENTER;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else if (manager->is_held(KEY_B)) {
+        data->key = LV_KEY_ESC;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else if (manager->is_held(KEY_RT)) {
+        data->key = LV_KEY_NEXT;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else if (manager->is_held(KEY_LT)) {
+        data->key = LV_KEY_PREV;
+        data->state = LV_INDEV_STATE_PRESSED;
+    }
+}

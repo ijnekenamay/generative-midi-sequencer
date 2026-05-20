@@ -151,292 +151,169 @@ volatile bool force_redraw = true;       // Global UI force redraw flag
 // --- Interactive Control State Variables (Cleaned) ---
 int disk_save_state = 0; // 0: Idle, 1: Writing, 2: Perform Flash Save, 3: Success flashing
 
-// --- Custom 32x32 High-Definition Pixel Art Bitmaps ---
-const uint8_t icon_play_32x32[128] = {
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x0C, 0x00, 0x00,
-    0x00, 0x1C, 0x00, 0x00,
-    0x00, 0x3C, 0x00, 0x00,
-    0x00, 0x7C, 0x00, 0x00,
-    0x00, 0xFC, 0x00, 0x00,
-    0x01, 0xFC, 0x00, 0x00,
-    0x03, 0xFC, 0x00, 0x00,
-    0x07, 0xFC, 0x00, 0x00,
-    0x0F, 0xFC, 0x00, 0x00,
-    0x1F, 0xFC, 0x00, 0x00,
-    0x3F, 0xFC, 0x00, 0x00,
-    0x7F, 0xFC, 0x00, 0x00,
-    0xFF, 0xFC, 0x00, 0x00,
-    0xFF, 0xFC, 0x00, 0x00,
-    0xFF, 0xFC, 0x00, 0x00,
-    0xFF, 0xFC, 0x00, 0x00,
-    0x7F, 0xFC, 0x00, 0x00,
-    0x3F, 0xFC, 0x00, 0x00,
-    0x1F, 0xFC, 0x00, 0x00,
-    0x0F, 0xFC, 0x00, 0x00,
-    0x07, 0xFC, 0x00, 0x00,
-    0x03, 0xFC, 0x00, 0x00,
-    0x01, 0xFC, 0x00, 0x00,
-    0x00, 0xFC, 0x00, 0x00,
-    0x00, 0x7C, 0x00, 0x00,
-    0x00, 0x3C, 0x00, 0x00,
-    0x00, 0x1C, 0x00, 0x00,
-    0x00, 0x0C, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00
-};
+#include "lvgl.h"
 
-const uint8_t icon_stop_32x32[128] = {
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0xFF, 0xFF, 0x00,
-    0x00, 0xFF, 0xFF, 0x00,
-    0x01, 0xFF, 0xFF, 0x80,
-    0x03, 0xFF, 0xFF, 0xC0,
-    0x07, 0xFF, 0xFF, 0xE0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x0F, 0xFF, 0xFF, 0xF0,
-    0x07, 0xFF, 0xFF, 0xE0,
-    0x03, 0xFF, 0xFF, 0xC0,
-    0x01, 0xFF, 0xFF, 0x80,
-    0x00, 0xFF, 0xFF, 0x00,
-    0x00, 0xFF, 0xFF, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00
-};
+// LVGL UI State
+static lv_obj_t* bpm_label;
+static lv_obj_t* scale_label;
+static lv_obj_t* status_label;
 
-const uint8_t icon_note_32x32[128] = {
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x03, 0xFF,
-    0x00, 0x00, 0x03, 0xFF,
-    0x00, 0x00, 0x03, 0xFF,
-    0x00, 0x00, 0x03, 0xCD,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x00, 0x03, 0xC8,
-    0x00, 0x03, 0x83, 0xC8,
-    0x00, 0x07, 0xC3, 0xC8,
-    0x00, 0x0F, 0xE3, 0xC8,
-    0x00, 0x1F, 0xE3, 0xC8,
-    0x00, 0x1F, 0xE3, 0xC8,
-    0x00, 0x0F, 0xC3, 0xC0,
-    0x00, 0x00, 0x03, 0xC0,
-    0x03, 0x80, 0x00, 0x00,
-    0x07, 0xC0, 0x00, 0x00,
-    0x0F, 0xE0, 0x00, 0x00,
-    0x1F, 0xE0, 0x00, 0x00,
-    0x1F, 0xE0, 0x00, 0x00,
-    0x0F, 0xC0, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00
-};
+static lv_obj_t* track_speed_labels[4];
+static lv_obj_t* track_param_labels[4][9];
+static lv_obj_t* track_canvases[4];
+// Canvas buffer for 266x8 at 16-bit color (RGB565)
+// Stride is 266 * 2 = 532 bytes. 532 * 8 = 4256 bytes per track.
+static uint8_t track_cbuf[4][4256];
 
-// Universal bitmap drawing helper (renders 1-bit raw glyphs of ANY width and height!)
-void draw_bitmap(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t* bitmap, uint16_t fg, uint16_t bg) {
-    uint16_t bytes_per_row = (w + 7) / 8;
-    for (uint16_t r = 0; r < h; ++r) {
-        for (uint16_t b = 0; b < bytes_per_row; ++b) {
-            uint8_t byte_val = bitmap[r * bytes_per_row + b];
-            for (uint8_t bit = 0; bit < 8; ++bit) {
-                uint16_t col = b * 8 + bit;
-                if (col >= w) break;
-                uint16_t color = (byte_val & (1 << (7 - bit))) ? fg : bg;
-                display.fill_rect(x + col, y + r, 1, 1, color);
-            }
-        }
-    }
+// LVGL Timer callback for Pico
+bool lvgl_timer_callback(struct repeating_timer *t) {
+    lv_tick_inc(5); // 5ms tick
+    return true;
 }
 
-// Render Helper
-// --- UI Differential Cache Table & Smooth Render Structures ---
-struct UICellCache {
-    uint8_t length = 0;
-    uint8_t density = 0;
-    uint8_t shift = 0;
-    uint8_t mutation = 0;
-    uint8_t jitter = 0;
-    uint8_t gate = 0;
-    uint8_t root_note = 0;
-    uint8_t scale_type = 0;
-    bool is_muted = false;
-    uint8_t clock_divide = 0;
-    bool is_focused = false;
-};
+struct repeating_timer lvgl_timer;
 
-static UICellCache cell_cache[4][10];
-static float cursor_visual_x = -1.0f;
-static float cursor_visual_y = -1.0f;
-static float cursor_last_drawn_x = -1.0f;
-static float cursor_last_drawn_y = -1.0f;
-static float cursor_last_drawn_w = -1.0f;
-static float cursor_last_drawn_h = -1.0f;
+void ui_init() {
+    lv_init();
 
-// Thread-safe cached parameters for UI drawing
-static TrackParams draw_params[4];
+    // Create Display
+    lv_display_t * disp = lv_display_create(display.get_width(), display.get_height());
+    lv_display_set_user_data(disp, &display);
+    lv_display_set_flush_cb(disp, DisplayController::lv_flush_cb);
+    
+    // Draw buffer 1/10th of screen size (320 * 24 = 7680 px) * 2 bytes = 15.36 KB
+    static uint8_t draw_buf[320 * 24 * 2];
+    lv_display_set_buffers(disp, draw_buf, NULL, sizeof(draw_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-// Redraws a single focused or unfocused parameter cell instantly (Microseconds update!)
-void draw_single_cell(uint8_t trk, uint8_t col, bool is_selected) {
-    uint16_t trk_y = 66 + trk * 42;
-    uint16_t cell_y = trk_y + 4;
-    bool is_muted = draw_params[trk].is_muted;
-    uint16_t track_bg = COLOR_BLACK;
+    // Create Input
+    lv_indev_t * indev = lv_indev_create();
+    lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
+    lv_indev_set_user_data(indev, &input);
+    lv_indev_set_read_cb(indev, InputManager::lv_keypad_read_cb);
 
-    if (col == 0) {
-        // A. Speed Cell (X: 6, Y: trk_y + 14, W: 32, H: 18)
-        uint16_t cell_x = 6;
-        char spd_str[6];
-        uint8_t div = draw_params[trk].clock_divide;
-        if (div == 24) sprintf(spd_str, "x1");
-        else if (div == 12) sprintf(spd_str, "x2");
-        else if (div == 6)  sprintf(spd_str, "x4");
-        else if (div == 3)  sprintf(spd_str, "x8");
-        else if (div == 8)  sprintf(spd_str, "x3");
-        else if (div == 4)  sprintf(spd_str, "x6");
-        else if (div == 48) sprintf(spd_str, "/2");
-        else sprintf(spd_str, "/%d", div);
+    // Setup UI Widgets
+    lv_obj_t * scr = lv_screen_active();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x111111), 0); // Very dark theme
 
-        bool trk_hit = shared_step_hit[trk] && !is_muted;
-        uint16_t spd_bg = track_bg;
-        uint16_t spd_fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
+    // Header Panel
+    lv_obj_t * header = lv_obj_create(scr);
+    lv_obj_set_size(header, 320, 40);
+    lv_obj_set_style_radius(header, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_border_width(header, 0, 0);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
 
-        if (trk_hit) {
-            spd_bg = COLOR_WHITE;
-            spd_fg = COLOR_BLACK;
+    bpm_label = lv_label_create(header);
+    lv_obj_align(bpm_label, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_label_set_text(bpm_label, "BPM: ---");
+    lv_obj_set_style_text_color(bpm_label, lv_color_hex(0xFFFFFF), 0);
+
+    status_label = lv_label_create(header);
+    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, 0);
+    lv_label_set_text(status_label, "STOP");
+    lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF3333), 0);
+
+    scale_label = lv_label_create(header);
+    lv_obj_align(scale_label, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_label_set_text(scale_label, "SCL: ---");
+    lv_obj_set_style_text_color(scale_label, lv_color_hex(0xFFFFFF), 0);
+
+    // Tracks
+    for(int i=0; i<4; i++) {
+        lv_obj_t * trk_panel = lv_obj_create(scr);
+        lv_obj_set_size(trk_panel, 310, 45);
+        lv_obj_align(trk_panel, LV_ALIGN_TOP_MID, 0, 45 + i * 48);
+        lv_obj_set_style_bg_color(trk_panel, lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_border_color(trk_panel, lv_color_hex(0x333333), 0);
+        lv_obj_set_style_pad_all(trk_panel, 2, 0);
+
+        // Speed Label (Cursor Col 0)
+        track_speed_labels[i] = lv_label_create(trk_panel);
+        lv_obj_set_size(track_speed_labels[i], 30, 20);
+        lv_obj_align(track_speed_labels[i], LV_ALIGN_LEFT_MID, 0, 0);
+        lv_label_set_text(track_speed_labels[i], "x1");
+
+        // Param Labels (Cursor Col 1 to 9)
+        for(int j=0; j<9; j++) {
+            track_param_labels[i][j] = lv_label_create(trk_panel);
+            lv_obj_set_size(track_param_labels[i][j], 25, 20);
+            lv_obj_align(track_param_labels[i][j], LV_ALIGN_LEFT_MID, 35 + j * 28, -10);
+            lv_label_set_text(track_param_labels[i][j], "00");
         }
 
-        display.fill_rect(cell_x, trk_y + 14, 32, 18, spd_bg);
-        display.draw_text(cell_x, trk_y + 15, spd_str, spd_fg, spd_bg, 2);
-
-        // Draw selection frame directly if animation is inactive and cell is active
-        if (is_selected) {
-            display.draw_rect(cell_x, trk_y + 14, 32, 18, COLOR_CYAN);
-        }
-    } else {
-        // B. Standard Parameter Cell (X: 44 + (col-1)*30, Y: trk_y + 4, W: 26, H: 20)
-        uint16_t cell_x = 44 + (col - 1) * 30;
-        uint16_t bg = COLOR_BLACK;
-        uint16_t fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
-        uint16_t border_color = is_selected ? COLOR_CYAN : COLOR_DARK_GREY;
-
-        display.fill_rect(cell_x, cell_y, 26, 20, bg);
-        display.draw_rect(cell_x, cell_y, 26, 20, border_color);
-
-        char val_str[6] = "";
-        switch (col) {
-            case 1: sprintf(val_str, "%02d", draw_params[trk].length); break;
-            case 2: sprintf(val_str, "%02d", draw_params[trk].density); break;
-            case 3: sprintf(val_str, "%02d", draw_params[trk].shift); break;
-            case 4: sprintf(val_str, "%02d", draw_params[trk].mutation); break;
-            case 5: sprintf(val_str, "%02d", draw_params[trk].jitter); break;
-            case 6: sprintf(val_str, "%02d", draw_params[trk].gate); break;
-            case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
-            case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
-            case 9: sprintf(val_str, "RN"); break;
-        }
-
-        bool is_bold = false;
-        if (is_selected) {
-            fg = is_muted ? COLOR_GREY : COLOR_WHITE;
-            is_bold = true;
-        } else {
-            switch (col) {
-                case 1: case 2: case 4:
-                    fg = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
-                    is_bold = true;
-                    break;
-                case 9:
-                    fg = COLOR_CYAN;
-                    is_bold = true;
-                    break;
-                default:
-                    fg = is_muted ? COLOR_DARK_GREY : COLOR_LIGHT_GREY;
-                    is_bold = false;
-                    break;
-            }
-        }
-
-        uint8_t text_x_offset = 4;
-        display.draw_text(cell_x + text_x_offset, cell_y + 6, val_str, fg, bg, 1);
-        if (is_bold) {
-            display.draw_text(cell_x + text_x_offset + 1, cell_y + 6, val_str, fg, bg, 1);
-        }
+        // Custom Canvas for Steps
+        track_canvases[i] = lv_canvas_create(trk_panel);
+        lv_canvas_set_buffer(track_canvases[i], track_cbuf[i], 266, 8, LV_COLOR_FORMAT_RGB565);
+        lv_obj_align(track_canvases[i], LV_ALIGN_BOTTOM_RIGHT, -5, -2);
+        lv_canvas_fill_bg(track_canvases[i], lv_color_hex(0x000000), LV_OPA_COVER);
     }
+    
+    // Start LVGL tick timer
+    add_repeating_timer_ms(5, lvgl_timer_callback, NULL, &lvgl_timer);
 }
 
-// Redraws the 266x4 step sequencer lane for a single track efficiently (differential update!)
+// Custom renderer for the step sequencer playheads (writes directly to LVGL canvas buffer!)
 void draw_track_steps(uint8_t trk, bool force) {
-    uint16_t trk_y = 66 + trk * 42;
-    uint16_t steps_y = trk_y + 32;
-
     static uint8_t last_step[4] = {255, 255, 255, 255};
     static uint8_t last_len[4] = {0, 0, 0, 0};
     static uint8_t last_density[4] = {255, 255, 255, 255};
     static uint8_t last_shift[4] = {255, 255, 255, 255};
     static bool last_muted[4] = {false, false, false, false};
 
-    uint8_t len = draw_params[trk].length;
+    TrackParams& p = shared_params[trk];
+    uint8_t len = p.length;
     uint8_t curr = shared_current_step[trk];
-    uint8_t den = draw_params[trk].density;
-    uint8_t shf = draw_params[trk].shift;
-    bool muted = draw_params[trk].is_muted;
+    uint8_t den = p.density;
+    uint8_t shf = p.shift;
+    bool muted = p.is_muted;
     bool is_hit = shared_step_hit[trk];
 
     if (len == 0) return;
     uint16_t step_w = 262 / len;
 
-    // Check if parameters of the sequencer lane have changed
-    bool lane_changed = (len != last_len[trk]) || (den != last_density[trk]) || (shf != last_shift[trk]) || (muted != last_muted[trk]);
+    bool lane_changed = force || (len != last_len[trk]) || (den != last_density[trk]) || (shf != last_shift[trk]) || (muted != last_muted[trk]);
 
-    if (force || lane_changed) {
-        // Redraw whole step sequencer lane only on structural changes (length, density shift)
-        display.fill_rect(44, steps_y, 266, 4, COLOR_BLACK);
-        display.fill_rect(44, steps_y + 1, 266, 2, COLOR_DARK_GREY);
+    uint16_t* cbuf = (uint16_t*)track_cbuf[trk]; // 16-bit pixels
+
+    auto draw_rect = [&](int x, int y, int w, int h, uint16_t color) {
+        for (int ry = y; ry < y + h; ++ry) {
+            if (ry < 0 || ry >= 8) continue;
+            for (int rx = x; rx < x + w; ++rx) {
+                if (rx < 0 || rx >= 266) continue;
+                // Swap bytes for little endian vs big endian if needed, LVGL normally expects native format
+                cbuf[ry * 266 + rx] = (color >> 8) | (color << 8); 
+            }
+        }
+    };
+
+    // RGB565 color constants (native 16-bit, byte-swapped in draw_rect)
+    static constexpr uint16_t C_BLACK      = 0x0000;
+    static constexpr uint16_t C_DARK_GREY  = 0x2104;
+    static constexpr uint16_t C_GREY       = 0x7BEF;
+    static constexpr uint16_t C_LIGHT_GREY = 0xC618;
+    static constexpr uint16_t C_WHITE      = 0xFFFF;
+    static constexpr uint16_t C_CYAN       = 0x07FF;
+
+    if (lane_changed) {
+        // Redraw whole step sequencer lane
+        lv_canvas_fill_bg(track_canvases[trk], lv_color_hex(0x000000), LV_OPA_COVER);
+        draw_rect(0, 4, 266, 2, C_DARK_GREY);
 
         for (uint8_t s = 0; s < len; ++s) {
-            uint16_t sx = 44 + s * step_w;
+            uint16_t sx = s * step_w;
             uint16_t sc;
             EuclideanGenerator rhythm_calc;
             bool is_active_beat = rhythm_calc.calculate_step(s, len, den, shf);
 
             if (s == curr) {
-                sc = muted ? COLOR_GREY : (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY);
+                sc = muted ? C_GREY : (is_hit ? C_WHITE : C_LIGHT_GREY);
             } else {
-                if (is_active_beat) {
-                    sc = muted ? COLOR_DARK_GREY : COLOR_CYAN;
-                } else {
-                    sc = COLOR_DARK_GREY;
-                }
+                sc = is_active_beat ? (muted ? C_DARK_GREY : C_CYAN) : C_DARK_GREY;
             }
 
-            uint16_t sh = (s == curr) ? 4 : (is_active_beat ? 3 : 2);
-            uint16_t sy = (s == curr) ? steps_y : (steps_y + 1);
-            display.fill_rect(sx, sy, step_w - 1, sh, sc);
+            uint16_t sh = (s == curr) ? 8 : (is_active_beat ? 6 : 4);
+            uint16_t sy = (s == curr) ? 0 : (8 - sh);
+            draw_rect(sx, sy, step_w - 1, sh, sc);
         }
 
         last_len[trk] = len;
@@ -444,302 +321,93 @@ void draw_track_steps(uint8_t trk, bool force) {
         last_shift[trk] = shf;
         last_muted[trk] = muted;
         last_step[trk] = curr;
+        lv_obj_invalidate(track_canvases[trk]);
     } else if (curr != last_step[trk] || is_hit) {
-        // Silky Differential Step updates! Only redraw the PREVIOUS step and the CURRENT step!
-        // This cuts down SPI load by 95%!
+        // Differential Step update — only touches 2 step cells
         uint8_t prev = last_step[trk];
         EuclideanGenerator rhythm_calc;
 
         // 1. Redraw previous step to its original resting state
         if (prev < len) {
-            uint16_t sx = 44 + prev * step_w;
+            uint16_t sx = prev * step_w;
             bool is_active_beat = rhythm_calc.calculate_step(prev, len, den, shf);
-            uint16_t sc = is_active_beat ? (muted ? COLOR_DARK_GREY : COLOR_CYAN) : COLOR_DARK_GREY;
-            uint16_t sh = is_active_beat ? 3 : 2;
+            uint16_t sc = is_active_beat ? (muted ? C_DARK_GREY : C_CYAN) : C_DARK_GREY;
+            uint16_t sh = is_active_beat ? 6 : 4;
             
-            // Clear step column first
-            display.fill_rect(sx, steps_y, step_w - 1, 4, COLOR_BLACK);
-            display.fill_rect(sx, steps_y + 1, step_w - 1, 2, COLOR_DARK_GREY);
-            display.fill_rect(sx, steps_y + 1, step_w - 1, sh, sc);
+            draw_rect(sx, 0, step_w - 1, 8, C_BLACK);
+            draw_rect(sx, 4, step_w - 1, 2, C_DARK_GREY);
+            draw_rect(sx, 8 - sh, step_w - 1, sh, sc);
         }
 
         // 2. Draw current active playhead step
         if (curr < len) {
-            uint16_t sx = 44 + curr * step_w;
-            uint16_t sc = muted ? COLOR_GREY : (is_hit ? COLOR_WHITE : COLOR_LIGHT_GREY);
+            uint16_t sx = curr * step_w;
+            uint16_t sc = muted ? C_GREY : (is_hit ? C_WHITE : C_LIGHT_GREY);
             
-            display.fill_rect(sx, steps_y, step_w - 1, 4, COLOR_BLACK);
-            display.fill_rect(sx, steps_y, step_w - 1, 4, sc);
+            draw_rect(sx, 0, step_w - 1, 8, C_BLACK);
+            draw_rect(sx, 0, step_w - 1, 8, sc);
         }
 
         last_step[trk] = curr;
+        lv_obj_invalidate(track_canvases[trk]);
     }
 }
 
-// Differential rendering orchestrator - strictly partial drawing (Dirty Rect)
-void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, bool is_animating) {
-    // Thread-safe parameters copying under spinlock
+void ui_update() {
     uint32_t lock_save = lock_shared_params();
+    TrackParams draw_params[4];
     for (int i = 0; i < 4; ++i) {
         draw_params[i] = shared_params[i];
     }
     unlock_shared_params(lock_save);
 
-    uint32_t now = to_ms_since_boot(get_absolute_time());
+    // Update Header
+    lv_label_set_text_fmt(bpm_label, "BPM: %03d", shared_bpm);
+    if(sequencer_playing) {
+        lv_label_set_text(status_label, "RUN");
+        lv_obj_set_style_text_color(status_label, lv_color_hex(0x33FF33), 0);
+    } else {
+        lv_label_set_text(status_label, "STOP");
+        lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF3333), 0);
+    }
 
-    // ----------------------------------------------------
-    // 1. Render Header Area (Only on state changes)
-    // ----------------------------------------------------
-    static bool last_master_flash = false;
-    static int last_disk_save_state = -1;
-    static bool last_sequencer_playing = false;
-    static uint8_t last_scale_idx = 255;
-    static uint16_t last_bpm = 0;
-    static uint8_t last_header_cursor_track = 255;
-    static uint32_t last_cpu_draw_time = 0;
-
-    bool master_flash = sequencer_playing && ((shared_master_ticks / 12) % 2 == 0);
+    const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
     uint8_t current_scale_idx = draw_params[cursor_track].scale_type;
-    if (current_scale_idx >= 5) current_scale_idx = 0;
-
-    bool header_needs_update = force_redraw || 
-                               (master_flash != last_master_flash) ||
-                               (disk_save_state != last_disk_save_state) ||
-                               (sequencer_playing != last_sequencer_playing) ||
-                               (current_scale_idx != last_scale_idx) ||
-                               (shared_bpm != last_bpm) ||
-                               (cursor_track != last_header_cursor_track) ||
-                               (now - last_cpu_draw_time > 1000);
-
-    if (header_needs_update) {
-        last_master_flash = master_flash;
-        last_disk_save_state = disk_save_state;
-        last_sequencer_playing = sequencer_playing;
-        last_scale_idx = current_scale_idx;
-        last_bpm = shared_bpm;
-        last_header_cursor_track = cursor_track;
-        if (now - last_cpu_draw_time > 1000) last_cpu_draw_time = now;
-
-        if (force_redraw) {
-            display.fill_rect(0, 0, 320, 48, COLOR_BLACK);
-        }
-        
-        // Vertical BPM Label
-        display.draw_text(8, 11, "B", COLOR_GREY, COLOR_BLACK, 1);
-        display.draw_text(9, 11, "B", COLOR_GREY, COLOR_BLACK, 1);
-        display.draw_text(8, 21, "P", COLOR_GREY, COLOR_BLACK, 1);
-        display.draw_text(9, 21, "P", COLOR_GREY, COLOR_BLACK, 1);
-        display.draw_text(8, 31, "M", COLOR_GREY, COLOR_BLACK, 1);
-        display.draw_text(9, 31, "M", COLOR_GREY, COLOR_BLACK, 1);
-
-        uint16_t bpm_bg = master_flash ? COLOR_WHITE : COLOR_BLACK;
-        uint16_t bpm_fg = master_flash ? COLOR_BLACK : COLOR_WHITE;
-
-        display.fill_rect(16, 8, 62, 32, bpm_bg);
-
-        char bpm_str[8];
-        sprintf(bpm_str, "%03d", shared_bpm);
-        for (int i = 0; i < 3; ++i) {
-            uint8_t digit = bpm_str[i] - '0';
-            draw_bitmap(20 + i * 18, 12, 16, 24, font_16x24[digit], bpm_fg, bpm_bg);
-        }
-
-        display.fill_rect(90, 6, 1, 36, COLOR_DARK_GREY);
-
-        // Play/Pause Capsule
-        uint16_t pill_bg = sequencer_playing ? 0x03E0 : COLOR_BLACK; 
-        uint16_t pill_fg = sequencer_playing ? COLOR_BLACK : COLOR_LIGHT_GREY;
-        display.fill_rect(96, 12, 58, 24, pill_bg);
-        if (!sequencer_playing) {
-            display.draw_rect(96, 12, 58, 24, COLOR_DARK_GREY);
-        }
-        
-        draw_bitmap(98, 16, 16, 16, icon_play_pause_16x16, pill_fg, pill_bg);
-        display.draw_text(118, 20, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
-
-        // Scale Capsule
-        const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
-        char scale_lbl[16];
-        sprintf(scale_lbl, "SCL:%s", scale_names[current_scale_idx]);
-        
-        uint16_t scale_bg = COLOR_BLACK; 
-        display.fill_rect(162, 12, 112, 24, scale_bg);
-        display.draw_rect(162, 12, 112, 24, COLOR_DARK_GREY);
-        
-        draw_bitmap(168, 16, 16, 16, icon_note_16x16, COLOR_LIGHT_GREY, scale_bg);
-        display.draw_text(188, 20, scale_lbl, COLOR_WHITE, scale_bg, 1);
-
-        // Save Capsule
-        uint16_t disk_bg = COLOR_BLACK;
-        uint8_t disk_y_offset = (disk_save_state > 0) ? 1 : 0;
-        display.fill_rect(284, 12, 30, 24, disk_bg);
-        
-        uint16_t current_disk_border = COLOR_DARK_GREY;
-        if (disk_save_state == 1 || disk_save_state == 2) {
-            current_disk_border = COLOR_MAGENTA;
-        } else if (disk_save_state == 3) {
-            current_disk_border = COLOR_CYAN;
-        }
-        display.draw_rect(284, 12, 30, 24, current_disk_border);
-        
-        uint16_t disk_icon_fg = COLOR_LIGHT_GREY;
-        if (disk_save_state == 1 || disk_save_state == 2) {
-            disk_icon_fg = COLOR_MAGENTA;
-        } else if (disk_save_state == 3) {
-            disk_icon_fg = COLOR_CYAN;
-        }
-        
-        draw_bitmap(291, 16 + disk_y_offset, 16, 16, icon_save_16x16, disk_icon_fg, disk_bg);
-
-        // Divider
-        display.fill_rect(0, 47, 320, 1, COLOR_DARK_GREY);
+    if(current_scale_idx < 5) {
+        lv_label_set_text_fmt(scale_label, "SCL: %s", scale_names[current_scale_idx]);
     }
 
-    // ----------------------------------------------------
-    // 2. Render Track Static Side Elements (Once or on Redraw)
-    // ----------------------------------------------------
-    if (force_redraw) {
-        for (int trk = 0; trk < 4; ++trk) {
-            uint16_t trk_y = 66 + trk * 42;
-            bool is_muted = draw_params[trk].is_muted;
-
-            display.draw_text(6, trk_y + 6, is_muted ? "MUT" : "CH", is_muted ? COLOR_DARK_GREY : COLOR_GREY, COLOR_BLACK, 1);
-            char trk_num_str[2] = { (char)('1' + trk), '\0' };
-            uint16_t trk_num_color = is_muted ? COLOR_DARK_GREY : COLOR_WHITE;
-            display.draw_text(24, trk_y + 6, trk_num_str, trk_num_color, COLOR_BLACK, 1);
-            display.draw_text(25, trk_y + 6, trk_num_str, trk_num_color, COLOR_BLACK, 1); // Faux bold
-
-            if (is_muted) {
-                draw_bitmap(24, trk_y + 14, 16, 16, icon_mute_16x16, COLOR_DARK_GREY, COLOR_BLACK);
-            }
-        }
-    }
-
-    // ----------------------------------------------------
-    // 3. Differential Parameter Cell Render (Dirty check)
-    // ----------------------------------------------------
-    static uint8_t last_cursor_track = 255;
-    static uint8_t last_cursor_col = 255;
-    
-    // Clear old visual cursor box before checking cell values
-    if (is_animating || force_redraw) {
-        // Redraw cells intersecting the last drawn visual cursor bounding box
-        // to erase the old cyan visual border trace perfectly!
-        if (cursor_last_drawn_x >= 0) {
-            // Find which cells the last drawn cursor frame was overlapping
-            // To be robust and super fast: redraw the previous focus target and the current focus target!
-            if (last_cursor_track < 4 && last_cursor_col < 10) {
-                draw_single_cell(last_cursor_track, last_cursor_col, false);
-            }
-            if (cursor_track < 4 && cursor_col < 10) {
-                draw_single_cell(cursor_track, cursor_col, (cursor_track == cursor_track && cursor_col == cursor_col && !is_animating));
-            }
+    // Update Tracks
+    for(int i=0; i<4; ++i) {
+        // Highlighting for cursor
+        for(int j=0; j<9; ++j) {
+            bool is_selected = (cursor_track == i && cursor_col == (j+1));
+            lv_obj_set_style_text_color(track_param_labels[i][j], is_selected ? lv_color_hex(0x00FFFF) : lv_color_hex(0xAAAAAA), 0);
             
-            // Clean boundary redraw in physical pixels surrounding the old visual cursor bounds
-            display.draw_rect(cursor_last_drawn_x, cursor_last_drawn_y, cursor_last_drawn_w, cursor_last_drawn_h, COLOR_BLACK);
-        }
-    }
-
-    for (int trk = 0; trk < 4; ++trk) {
-        bool is_muted = draw_params[trk].is_muted;
-        
-        for (int col = 0; col < 10; ++col) {
-            uint16_t cell_y = 66 + trk * 42 + 4;
-            
-            // Gather state properties
-            uint8_t len = draw_params[trk].length;
-            uint8_t den = draw_params[trk].density;
-            uint8_t shf = draw_params[trk].shift;
-            uint8_t mut = draw_params[trk].mutation;
-            uint8_t jit = draw_params[trk].jitter;
-            uint8_t gat = draw_params[trk].gate;
-            uint8_t rot = draw_params[trk].root_note;
-            uint8_t scl = draw_params[trk].scale_type;
-            uint8_t div = draw_params[trk].clock_divide;
-            bool selected = (cursor_track == trk && cursor_col == col);
-            bool trk_hit = shared_step_hit[trk] && !is_muted;
-
-            UICellCache& cache = cell_cache[trk][col];
-
-            // Perform differential cache dirty check
-            bool dirty = force_redraw ||
-                         (cache.length != len) ||
-                         (cache.density != den) ||
-                         (cache.shift != shf) ||
-                         (cache.mutation != mut) ||
-                         (cache.jitter != jit) ||
-                         (cache.gate != gat) ||
-                         (cache.root_note != rot) ||
-                         (cache.scale_type != scl) ||
-                         (cache.is_muted != is_muted) ||
-                         (cache.clock_divide != div) ||
-                         (col == 0 && trk_hit) || // Force speed cell update on real-time MIDI flash hits!
-                         (cache.is_focused != selected && !is_animating); // Only update selection static focus border if not actively sliding
-
-            if (dirty) {
-                draw_single_cell(trk, col, selected && !is_animating);
-
-                // Populate cache
-                cache.length = len;
-                cache.density = den;
-                cache.shift = shf;
-                cache.mutation = mut;
-                cache.jitter = jit;
-                cache.gate = gat;
-                cache.root_note = rot;
-                cache.scale_type = scl;
-                cache.is_muted = is_muted;
-                cache.clock_divide = div;
-                cache.is_focused = selected;
+            int val = 0;
+            switch(j) {
+                case 0: val = draw_params[i].length; break;
+                case 1: val = draw_params[i].density; break;
+                case 2: val = draw_params[i].shift; break;
+                case 3: val = draw_params[i].mutation; break;
+                case 4: val = draw_params[i].jitter; break;
+                case 5: val = draw_params[i].gate; break;
+                case 6: val = draw_params[i].root_note; break;
+                case 7: val = draw_params[i].scale_type + 1; break;
+                case 8: val = 99; break; // RND
             }
-
-            // Draw header icon indicators above track 0 cells
-            if (trk == 0 && force_redraw) {
-                uint16_t cell_x = 44 + (col - 1) * 30;
-                const uint8_t* icon_ptr = nullptr;
-                switch (col) {
-                    case 1: icon_ptr = icon_len_8x8; break;
-                    case 2: icon_ptr = icon_den_8x8; break;
-                    case 3: icon_ptr = icon_shf_8x8; break;
-                    case 4: icon_ptr = icon_mut_8x8; break;
-                    case 5: icon_ptr = icon_jit_8x8; break;
-                    case 6: icon_ptr = icon_gat_8x8; break;
-                    case 7: icon_ptr = icon_rot_8x8; break;
-                    case 8: icon_ptr = icon_scl_8x8; break;
-                    case 9: icon_ptr = icon_rnd_8x8; break;
-                }
-                
-                uint16_t header_icon_fg = COLOR_GREY;
-                if (col == 9) header_icon_fg = COLOR_CYAN;
-                
-                if (icon_ptr) {
-                    draw_bitmap(cell_x + 5, 66 - 14, 16, 16, icon_ptr, header_icon_fg, COLOR_BLACK);
-                }
-            }
+            if(j == 8) lv_label_set_text(track_param_labels[i][j], "RN");
+            else if (j == 7) lv_label_set_text_fmt(track_param_labels[i][j], "S%d", val);
+            else lv_label_set_text_fmt(track_param_labels[i][j], "%02d", val);
         }
 
-        // ----------------------------------------------------
-        // 4. Render Step Sequencer Playheads (Dirty Update)
-        // ----------------------------------------------------
-        draw_track_steps(trk, force_redraw);
-    }
+        bool is_speed_selected = (cursor_track == i && cursor_col == 0);
+        lv_obj_set_style_text_color(track_speed_labels[i], is_speed_selected ? lv_color_hex(0x00FFFF) : lv_color_hex(0xAAAAAA), 0);
+        lv_label_set_text_fmt(track_speed_labels[i], "/%d", draw_params[i].clock_divide);
 
-    // ----------------------------------------------------
-    // 5. Draw Silky Smooth Eased Visual Cursor Box (Only if active or forced!)
-    // ----------------------------------------------------
-    if (is_animating || !is_animating) {
-        // Draw the visual eased outline in Neon Cyan directly over the grid!
-        display.draw_rect((uint16_t)cur_x, (uint16_t)cur_y, (uint16_t)cur_w, (uint16_t)cur_h, COLOR_CYAN);
-        
-        // Cache the drawn bounds to clean them perfectly on the next frame update
-        cursor_last_drawn_x = cur_x;
-        cursor_last_drawn_y = cur_y;
-        cursor_last_drawn_w = cur_w;
-        cursor_last_drawn_h = cur_h;
+        // Update step canvas (hybrid approach)
+        draw_track_steps(i, force_redraw);
     }
-
-    last_cursor_track = cursor_track;
-    last_cursor_col = cursor_col;
 }
 
 
@@ -866,18 +534,9 @@ int main() {
     printf("[Core 0] Initializing Peripherals...\n");
     input.init();
     display.init();
-    display.clear(COLOR_BLACK);
 
-    // Premium Elektron-style Boot Splash Sequence
-    draw_bitmap(144, 70, 32, 32, icon_splash_logo_32x32, COLOR_WHITE, COLOR_BLACK);
-    display.draw_text(96, 120, "GEN-MIDI", COLOR_WHITE, COLOR_BLACK, 2);
-    display.draw_text(97, 120, "GEN-MIDI", COLOR_WHITE, COLOR_BLACK, 2); // Faux-bold overlay
-    display.draw_text(136, 145, "V1.0.0", COLOR_GREY, COLOR_BLACK, 1);
-    display.draw_text(72, 175, "INITIALIZING ENGINE...", COLOR_DARK_GREY, COLOR_BLACK, 1);
-    
-    // Premium boot delay for player anticipation
-    sleep_ms(1500);
-    display.clear(COLOR_BLACK);
+    // Initialize LVGL UI
+    ui_init();
 
     // Initialize the spinlock for safe parameter copies between Core 0 and Core 1
     shared_params_lock = spin_lock_init(spin_lock_claim_unused(true));
@@ -1088,64 +747,18 @@ int main() {
         }
 
         // ----------------------------------------------------
-        // Smooth Visual Cursor Animation & Differential Update Execution
-        // ----------------------------------------------------
-        bool is_animating = false;
-        float target_x = 0;
-        float target_y = 66 + cursor_track * 42 + 4;
-        float target_w = 0;
-        float target_h = 0;
-
-        if (cursor_col == 0) {
-            target_x = 6;
-            target_y = 66 + cursor_track * 42 + 14; // Speed cells are shifted down
-            target_w = 32;
-            target_h = 18;
-        } else {
-            target_x = 44 + (cursor_col - 1) * 30;
-            target_w = 26;
-            target_h = 20;
-        }
-
-        static float cursor_visual_w = -1.0f;
-        static float cursor_visual_h = -1.0f;
-
-        if (cursor_visual_x < 0) {
-            // First run snap
-            cursor_visual_x = target_x;
-            cursor_visual_y = target_y;
-            cursor_visual_w = target_w;
-            cursor_visual_h = target_h;
-        } else {
-            // Exponential smoothing (LERP ease-out)
-            float dx = target_x - cursor_visual_x;
-            float dy = target_y - cursor_visual_y;
-            float dw = target_w - cursor_visual_w;
-            float dh = target_h - cursor_visual_h;
-
-            if (std::abs(dx) > 0.05f || std::abs(dy) > 0.05f || std::abs(dw) > 0.05f || std::abs(dh) > 0.05f) {
-                cursor_visual_x += dx * 0.35f;
-                cursor_visual_y += dy * 0.35f;
-                cursor_visual_w += dw * 0.35f;
-                cursor_visual_h += dh * 0.35f;
-                is_animating = true;
-            } else {
-                cursor_visual_x = target_x;
-                cursor_visual_y = target_y;
-                cursor_visual_w = target_w;
-                cursor_visual_h = target_h;
-            }
-        }
-
         // Render differential changes under extreme speed optimizations
-        if (value_changed || force_redraw || sequencer_playing || is_animating) {
-            update_ui_dashboard(cursor_visual_x, cursor_visual_y, cursor_visual_w, cursor_visual_h, is_animating);
+        if (value_changed || force_redraw || sequencer_playing) {
+            ui_update();
             value_changed = false;
             force_redraw = false;
-        } else {
-            // Dynamic idle drop to save CPU load entirely while keeping edge detection responsive!
-            sleep_ms(10); 
         }
+
+        // Call LVGL timer handler to process animations, inputs, and drawing
+        lv_timer_handler();
+        
+        // Yield to save CPU
+        sleep_ms(1); 
     }
     
     return 0;

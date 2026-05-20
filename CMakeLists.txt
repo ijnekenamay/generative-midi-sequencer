@@ -11,5 +11,8 @@ set(CMAKE_CXX_STANDARD 17)
 # Initialize SDK
 pico_sdk_init()
 
+# Add LVGL
+add_subdirectory(lib/lvgl)
+
 # Add src subdirectory
 add_subdirectory(src)

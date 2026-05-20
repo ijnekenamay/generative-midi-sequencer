@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "lvgl.h"
 
 enum KeyIndex {
     KEY_LEFT = 0,   // GP2  (Cursor Left)
@@ -58,4 +59,9 @@ public:
     
     // Modifier helper
     bool is_shift_active() const { return is_held(KEY_LT); }
+
+    /**
+     * LVGL Input Device read callback.
+     */
+    static void lv_keypad_read_cb(lv_indev_t * indev, lv_indev_data_t * data);
 };

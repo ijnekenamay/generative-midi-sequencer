@@ -1,20 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include <string>
-
-// RGB565 Premium Techno Color Palette
-#define COLOR_BLACK       0x0000
-#define COLOR_DARK_GREY   0x2104 // Very sleek dark background
-#define COLOR_GREY        0x7BEF
-#define COLOR_LIGHT_GREY  0xC618
-#define COLOR_WHITE       0xFFFF
-#define COLOR_GREEN       0x07E0
-#define COLOR_CYAN        0x07FF // Neon cyan
-#define COLOR_MAGENTA     0xF81F // Cyberpunk pink/magenta
-#define COLOR_YELLOW      0xFFE0
-#define COLOR_ORANGE      0xFD20 // Warm orange
-#define COLOR_RED         0xF800
-#define COLOR_PURPLE      0x780F
+#include "lvgl.h"
 
 class DisplayController {
 private:
@@ -49,34 +35,14 @@ public:
     void reset();
 
     /**
-     * Clears the screen with a specific RGB565 color.
+     * Flushes a rendered area from LVGL to the display.
      */
-    void clear(uint16_t color = COLOR_DARK_GREY);
+    void flush_area(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, const uint8_t* color_p);
 
     /**
-     * Draws a single pixel.
+     * Static callback for LVGL.
      */
-    void draw_pixel(uint16_t x, uint16_t y, uint16_t color);
-
-    /**
-     * Draws a filled rectangle (highly optimized via SPI buffer writes).
-     */
-    void fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-
-    /**
-     * Draws an empty rectangle outline.
-     */
-    void draw_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-
-    /**
-     * Draws a single character using an embedded 8x8 pixel font.
-     */
-    void draw_char(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t bg_color, uint8_t scale = 1);
-
-    /**
-     * Draws a string of text.
-     */
-    void draw_text(uint16_t x, uint16_t y, const std::string& text, uint16_t color, uint16_t bg_color, uint8_t scale = 1);
+    static void lv_flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map);
 
     // Getters for dimensions
     uint16_t get_width() const { return width; }
