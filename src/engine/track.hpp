@@ -47,6 +47,7 @@ private:
     // Asynchronous note scheduling states for jitter and gate length control
     uint64_t pending_note_on_time;
     uint8_t pending_note;
+    uint8_t pending_gate;
     bool has_pending_note;
     uint64_t pending_note_off_time;
     bool has_pending_note_off;
