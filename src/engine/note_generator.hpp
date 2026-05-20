@@ -58,7 +58,7 @@ public:
      * @param octave_range The span of notes (e.g. 2 octaves).
      * @return A MIDI note number (0-127).
      */
-    static uint8_t quantize(uint8_t raw_val, uint8_t root_note, ScaleType scale_type, uint8_t octave_range = 2);
+    static uint8_t quantize(uint8_t raw_val, uint8_t root_note, ScaleType scale_type, uint8_t octave_range = 4);
 
     /**
      * Gets the name of a scale.

@@ -618,7 +618,6 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, boo
     // ----------------------------------------------------
     // 3. Differential Parameter Cell Render (Dirty check)
     // ----------------------------------------------------
-    static uint8_t last_cursor_track = 255;
     static uint8_t last_cursor_col = 255;
     
     // Clear old visual cursor box before checking cell values
