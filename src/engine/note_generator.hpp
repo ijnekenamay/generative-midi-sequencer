@@ -55,10 +55,10 @@ public:
      * @param raw_val The 8-bit value (0-255) to quantize.
      * @param root_note The MIDI root note (e.g. 36 for C1, 48 for C2).
      * @param scale_type The ScaleType enum.
-     * @param octave_range The span of notes (e.g. 2 octaves).
+     * @param octave_range The span of notes (e.g. 4 octaves).
      * @return A MIDI note number (0-127).
      */
-    static uint8_t quantize(uint8_t raw_val, uint8_t root_note, ScaleType scale_type, uint8_t octave_range = 2);
+    static uint8_t quantize(uint8_t raw_val, uint8_t root_note, ScaleType scale_type, uint8_t octave_range = 4);
 
     /**
      * Gets the name of a scale.

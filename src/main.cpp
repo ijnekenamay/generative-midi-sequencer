@@ -495,7 +495,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, boo
     static bool last_sequencer_playing = false;
     static uint8_t last_scale_idx = 255;
     static uint16_t last_bpm = 0;
-    static uint8_t last_cursor_track = 255;
+    static uint8_t last_header_cursor_track = 255;
     static uint32_t last_cpu_draw_time = 0;
 
     bool master_flash = sequencer_playing && ((shared_master_ticks / 12) % 2 == 0);
@@ -508,7 +508,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, boo
                                (sequencer_playing != last_sequencer_playing) ||
                                (current_scale_idx != last_scale_idx) ||
                                (shared_bpm != last_bpm) ||
-                               (cursor_track != last_cursor_track) ||
+                               (cursor_track != last_header_cursor_track) ||
                                (now - last_cpu_draw_time > 1000);
 
     if (header_needs_update) {
@@ -517,7 +517,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, boo
         last_sequencer_playing = sequencer_playing;
         last_scale_idx = current_scale_idx;
         last_bpm = shared_bpm;
-        last_cursor_track = cursor_track;
+        last_header_cursor_track = cursor_track;
         if (now - last_cpu_draw_time > 1000) last_cpu_draw_time = now;
 
         if (force_redraw) {
