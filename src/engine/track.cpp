@@ -46,7 +46,7 @@ void Track::set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint
     scale_type = scale;
     clock_divide = (divide > 0) ? divide : 1;
     jitter_rate = (jit <= 100) ? jit : 100;
-    gate_rate = (gt >= 10 && gt <= 100) ? gt : 50;
+    gate_rate = (gt == 0 || (gt >= 10 && gt <= 100)) ? gt : 50;
     is_muted = muted;
 }
 
@@ -115,8 +115,13 @@ void Track::update_scheduled_events(uint32_t bpm, MidiHandler& midi) {
         // Calculate precise step duration for gate calculation
         uint64_t step_duration_us = (60ULL * 1000000ULL * clock_divide) / (bpm * 24ULL);
         
-        // Calculate base gate duration based on gate percentage (10% to 100%)
-        uint64_t base_gate_us = (step_duration_us * gate_rate) / 100ULL;
+        // Calculate base gate duration based on gate percentage
+        uint8_t actual_gate = gate_rate;
+        if (gate_rate == 0) {
+            // SL mode: dynamically randomize between Staccato (15) and Legato (95)
+            actual_gate = (get_rand_32() % 2 == 0) ? 15 : 95;
+        }
+        uint64_t base_gate_us = (step_duration_us * actual_gate) / 100ULL;
         
         // Add random gate length variation (up to 30% of the base gate length)
         uint64_t max_var = base_gate_us / 3ULL;

@@ -354,7 +354,14 @@ void draw_single_cell(uint8_t trk, uint8_t col, bool is_selected) {
             case 3: sprintf(val_str, "%02d", draw_params[trk].shift); break;
             case 4: sprintf(val_str, "%02d", draw_params[trk].mutation); break;
             case 5: sprintf(val_str, "%02d", draw_params[trk].jitter); break;
-            case 6: sprintf(val_str, "%02d", draw_params[trk].gate); break;
+            case 6: {
+                if (draw_params[trk].gate == 0) {
+                    sprintf(val_str, "SL");
+                } else {
+                    sprintf(val_str, "%02d", draw_params[trk].gate);
+                }
+                break;
+            }
             case 7: sprintf(val_str, "%02d", draw_params[trk].root_note); break;
             case 8: sprintf(val_str, "S%d", draw_params[trk].scale_type + 1); break;
             case 9: sprintf(val_str, "RN"); break;
@@ -477,7 +484,7 @@ void draw_track_steps(uint8_t trk, bool force) {
 }
 
 // Differential rendering orchestrator - strictly partial drawing (Dirty Rect)
-void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, bool is_animating) {
+void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
     // Thread-safe parameters copying under spinlock
     uint32_t lock_save = lock_shared_params();
     for (int i = 0; i < 4; ++i) {
@@ -619,23 +626,14 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, boo
     // 3. Differential Parameter Cell Render (Dirty check)
     // ----------------------------------------------------
     static uint8_t last_cursor_col = 255;
-    
-    // Clear old visual cursor box before checking cell values
-    if (is_animating || force_redraw) {
-        // Redraw cells intersecting the last drawn visual cursor bounding box
-        // to erase the old cyan visual border trace perfectly!
-        if (cursor_last_drawn_x >= 0) {
-            // Find which cells the last drawn cursor frame was overlapping
-            // To be robust and super fast: redraw the previous focus target and the current focus target!
-            if (last_cursor_track < 4 && last_cursor_col < 10) {
-                draw_single_cell(last_cursor_track, last_cursor_col, false);
-            }
-            if (cursor_track < 4 && cursor_col < 10) {
-                draw_single_cell(cursor_track, cursor_col, (cursor_track == cursor_track && cursor_col == cursor_col && !is_animating));
-            }
-            
-            // Clean boundary redraw in physical pixels surrounding the old visual cursor bounds
-            display.draw_rect(cursor_last_drawn_x, cursor_last_drawn_y, cursor_last_drawn_w, cursor_last_drawn_h, COLOR_BLACK);
+
+    // Always redraw the previously selected cell when the cursor moves,
+    // so the old cyan selection border/highlight is erased completely.
+    bool cursor_moved = (last_cursor_track != cursor_track || last_cursor_col != cursor_col);
+    if (cursor_moved || force_redraw) {
+        if (last_cursor_track < 4 && last_cursor_col < 10) {
+            draw_single_cell(last_cursor_track, last_cursor_col, false);
+            cell_cache[last_cursor_track][last_cursor_col].is_focused = false;
         }
     }
 
@@ -672,11 +670,11 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, boo
                          (cache.scale_type != scl) ||
                          (cache.is_muted != is_muted) ||
                          (cache.clock_divide != div) ||
-                         (col == 0 && trk_hit) || // Force speed cell update on real-time MIDI flash hits!
-                         (cache.is_focused != selected && !is_animating); // Only update selection static focus border if not actively sliding
+                          (col == 0 && trk_hit) || // Force speed cell update on real-time MIDI flash hits!
+                          (cache.is_focused != selected); // Only update selection static focus border
 
             if (dirty) {
-                draw_single_cell(trk, col, selected && !is_animating);
+                draw_single_cell(trk, col, selected);
 
                 // Populate cache
                 cache.length = len;
@@ -724,22 +722,37 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h, boo
     }
 
     // ----------------------------------------------------
-    // 5. Draw Silky Smooth Eased Visual Cursor Box (Only if active or forced!)
+    // 5. Draw Silky Smooth Eased Visual Cursor Box
     // ----------------------------------------------------
-    if (is_animating || !is_animating) {
-        // Draw the visual eased outline in Neon Cyan directly over the grid!
-        display.draw_rect((uint16_t)cur_x, (uint16_t)cur_y, (uint16_t)cur_w, (uint16_t)cur_h, COLOR_CYAN);
-        
-        // Cache the drawn bounds to clean them perfectly on the next frame update
-        cursor_last_drawn_x = cur_x;
-        cursor_last_drawn_y = cur_y;
-        cursor_last_drawn_w = cur_w;
-        cursor_last_drawn_h = cur_h;
+    // Erase the PREVIOUS frame's cursor rect EVERY frame (not just on cursor_moved),
+    // because the cursor animates to a new pixel position each frame and leaves a trail.
+    if (cursor_last_drawn_x >= 0) {
+        // Overwrite last frame's cyan border with black
+        display.draw_rect((uint16_t)cursor_last_drawn_x, (uint16_t)cursor_last_drawn_y,
+                          (uint16_t)cursor_last_drawn_w, (uint16_t)cursor_last_drawn_h, COLOR_BLACK);
+        // Restore the cell that was under the old cursor box (its dark-grey border was overwritten)
+        if (last_cursor_track < 4 && last_cursor_col < 10) {
+            draw_single_cell(last_cursor_track, last_cursor_col, false);
+        }
+        // Also restore the current destination cell so it looks correct before we draw the new box
+        if (cursor_track < 4 && cursor_col < 10) {
+            draw_single_cell(cursor_track, cursor_col, true);
+        }
     }
+
+    // Draw the new cursor box at the current animated position
+    display.draw_rect((uint16_t)cur_x, (uint16_t)cur_y, (uint16_t)cur_w, (uint16_t)cur_h, COLOR_CYAN);
+
+    // Cache drawn bounds for next frame cleanup
+    cursor_last_drawn_x = cur_x;
+    cursor_last_drawn_y = cur_y;
+    cursor_last_drawn_w = cur_w;
+    cursor_last_drawn_h = cur_h;
 
     last_cursor_track = cursor_track;
     last_cursor_col = cursor_col;
 }
+
 
 
 // Core 1 Entry Point (Realtime MIDI and Generative Engine)
@@ -1020,7 +1033,14 @@ int main() {
                 case 3: p.shift = (p.shift + step_size <= 32) ? p.shift + step_size : 32; break;
                 case 4: p.mutation = (p.mutation + step_size <= 100) ? p.mutation + step_size : 100; break;
                 case 5: p.jitter = (p.jitter + step_size <= 100) ? p.jitter + step_size : 100; break;
-                case 6: p.gate = (p.gate + step_size <= 100) ? p.gate + step_size : 100; break;
+                case 6: {
+                    if (p.gate == 0) {
+                        p.gate = 10;
+                    } else {
+                        p.gate = (p.gate + step_size <= 100) ? p.gate + step_size : 100;
+                    }
+                    break;
+                }
                 case 7: p.root_note = (p.root_note + step_size <= 127) ? p.root_note + step_size : 127; break;
                 case 8: p.scale_type = (p.scale_type + 1 < SCALE_COUNT) ? p.scale_type + 1 : 0; break;
                 case 9: { // RND button - Mutate rhythm & pitch pattern!
@@ -1031,8 +1051,13 @@ int main() {
                     p.mutation = static_cast<uint8_t>(get_rand_32() % 80);
                     uint8_t spd_options[] = {3, 4, 6, 8, 12, 24};
                     p.clock_divide = spd_options[get_rand_32() % 6];
-                    p.jitter = static_cast<uint8_t>(get_rand_32() % 40);
-                    p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
+                    p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning
+                    // 15% probability to enable SL (Staccato/Legato) mode, otherwise normal gate range
+                    if (get_rand_32() % 100 < 15) {
+                        p.gate = 0; // SL mode
+                    } else {
+                        p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
+                    }
                     tracks[cursor_track].randomize_pattern();
                     break;
                 }
@@ -1064,7 +1089,14 @@ int main() {
                 case 3: p.shift = (p.shift - step_size >= 0) ? p.shift - step_size : 0; break;
                 case 4: p.mutation = (p.mutation - step_size >= 0) ? p.mutation - step_size : 0; break;
                 case 5: p.jitter = (p.jitter - step_size >= 0) ? p.jitter - step_size : 0; break;
-                case 6: p.gate = (p.gate - step_size >= 10) ? p.gate - step_size : 10; break;
+                case 6: {
+                    if (p.gate <= 10) {
+                        p.gate = 0;
+                    } else {
+                        p.gate = (p.gate - step_size >= 10) ? p.gate - step_size : 10;
+                    }
+                    break;
+                }
                 case 7: p.root_note = (p.root_note - step_size >= 0) ? p.root_note - step_size : 0; break;
                 case 8: p.scale_type = (p.scale_type > 0) ? p.scale_type - 1 : SCALE_COUNT - 1; break;
                 case 9: { // RND button - Mutate rhythm & pitch pattern!
@@ -1075,8 +1107,13 @@ int main() {
                     p.mutation = static_cast<uint8_t>(get_rand_32() % 80);
                     uint8_t spd_options[] = {3, 4, 6, 8, 12, 24};
                     p.clock_divide = spd_options[get_rand_32() % 6];
-                    p.jitter = static_cast<uint8_t>(get_rand_32() % 40);
-                    p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
+                    p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning
+                    // 15% probability to enable SL (Staccato/Legato) mode, otherwise normal gate range
+                    if (get_rand_32() % 100 < 15) {
+                        p.gate = 0; // SL mode
+                    } else {
+                        p.gate = static_cast<uint8_t>(30 + (get_rand_32() % 60));
+                    }
                     tracks[cursor_track].randomize_pattern();
                     break;
                 }
@@ -1087,64 +1124,31 @@ int main() {
         }
 
         // ----------------------------------------------------
-        // Smooth Visual Cursor Animation & Differential Update Execution
+        // Cursor Position Calculation (Instant Snap - no animation)
         // ----------------------------------------------------
-        bool is_animating = false;
-        float target_x = 0;
-        float target_y = 66 + cursor_track * 42 + 4;
-        float target_w = 0;
-        float target_h = 0;
+        float target_x, target_y, target_w, target_h;
 
         if (cursor_col == 0) {
             target_x = 6;
-            target_y = 66 + cursor_track * 42 + 14; // Speed cells are shifted down
+            target_y = 66 + cursor_track * 42 + 14;
             target_w = 32;
             target_h = 18;
         } else {
             target_x = 44 + (cursor_col - 1) * 30;
+            target_y = 66 + cursor_track * 42 + 4;
             target_w = 26;
             target_h = 20;
         }
 
-        static float cursor_visual_w = -1.0f;
-        static float cursor_visual_h = -1.0f;
-
-        if (cursor_visual_x < 0) {
-            // First run snap
-            cursor_visual_x = target_x;
-            cursor_visual_y = target_y;
-            cursor_visual_w = target_w;
-            cursor_visual_h = target_h;
-        } else {
-            // Exponential smoothing (LERP ease-out)
-            float dx = target_x - cursor_visual_x;
-            float dy = target_y - cursor_visual_y;
-            float dw = target_w - cursor_visual_w;
-            float dh = target_h - cursor_visual_h;
-
-            if (std::abs(dx) > 0.05f || std::abs(dy) > 0.05f || std::abs(dw) > 0.05f || std::abs(dh) > 0.05f) {
-                cursor_visual_x += dx * 0.35f;
-                cursor_visual_y += dy * 0.35f;
-                cursor_visual_w += dw * 0.35f;
-                cursor_visual_h += dh * 0.35f;
-                is_animating = true;
-            } else {
-                cursor_visual_x = target_x;
-                cursor_visual_y = target_y;
-                cursor_visual_w = target_w;
-                cursor_visual_h = target_h;
-            }
-        }
-
-        // Render differential changes under extreme speed optimizations
-        if (value_changed || force_redraw || sequencer_playing || is_animating) {
-            update_ui_dashboard(cursor_visual_x, cursor_visual_y, cursor_visual_w, cursor_visual_h, is_animating);
+        // Render differential changes
+        if (value_changed || force_redraw || sequencer_playing) {
+            update_ui_dashboard(target_x, target_y, target_w, target_h);
             value_changed = false;
             force_redraw = false;
         } else {
-            // Dynamic idle drop to save CPU load entirely while keeping edge detection responsive!
-            sleep_ms(10); 
+            sleep_ms(10);
         }
+
     }
     
     return 0;
