@@ -15,6 +15,13 @@
 #include "ui/input_manager.hpp"
 #include "ui/display_controller.hpp"
 #include "ui/custom_assets.hpp"
+#include "tusb.h"
+
+// Forward declarations for TinyUSB device API used in this file
+extern "C" {
+    void tud_task(void);
+    bool tud_midi_n_mounted(uint8_t itf);
+}
 
 // --- IPC Shared Memory Structures ---
 
@@ -55,11 +62,11 @@ MidiHandler midi;
 
 // --- Custom PIO I2S Driver Definitions ---
 static const uint16_t i2s_pio_instructions[] = {
-    0xe02e, //  0: set    x, 14           side 2     ; BCLK=1, LRCK=0
+    0xe02e, //  0: set    x, 15           side 2     ; BCLK=1, LRCK=0
     0x6001, //  1: out    pins, 1         side 0     ; BCLK=0, LRCK=0
     0x0059, //  2: jmp    x--, 1          side 1     ; BCLK=1, LRCK=0
     0x6001, //  3: out    pins, 1         side 0     ; BCLK=0, LRCK=0
-    0xe03e, //  4: set    x, 14           side 3     ; BCLK=1, LRCK=1
+    0xe03e, //  4: set    x, 15           side 3     ; BCLK=1, LRCK=1
     0x6001, //  5: out    pins, 1         side 1     ; BCLK=0, LRCK=1
     0x007d, //  6: jmp    x--, 5          side 3     ; BCLK=1, LRCK=1
     0x6001  //  7: out    pins, 1         side 1     ; BCLK=0, LRCK=1
@@ -74,13 +81,22 @@ static const pio_program_t i2s_pio_program = {
 // Background I2S sample generation variables
 volatile uint32_t clock_pulse_remaining_samples = 0;
 struct repeating_timer i2s_timer;
+// When true, emit the trigger pulse only on the TIP (Left) channel
+// so a mono TS plug (TIP-only) receives the pulse. Set to true by default.
+volatile bool mono_tip_only = true;
 
 // 22.05 kHz Background Timer Interrupt Callback
 bool i2s_timer_callback(struct repeating_timer *t) {
     uint32_t sample = 0;
     if (clock_pulse_remaining_samples > 0) {
-        // Output maximum positive amplitude trigger pulse (Left/Right packed)
-        sample = 0x7FFF7FFF;
+        // Output maximum positive amplitude trigger pulse.
+        // For mono TIP-only, set left=0x7FFF and right=0x0000 -> 0x7FFF0000
+        // Otherwise drive both channels (left/right) -> 0x7FFF7FFF
+        if (mono_tip_only) {
+            sample = 0x7FFF0000;
+        } else {
+            sample = 0x7FFF7FFF;
+        }
         clock_pulse_remaining_samples--;
     } else {
         // Output zero (0V ground reference)
@@ -830,7 +846,7 @@ void core1_entry() {
                 // A. Send standard serial MIDI clock tick over UART0 TX (GP0)
                 midi.send_clock();
                 
-                // B. Trigger a physical 5ms analog clock sync pulse via I2S DAC (GP26 Data, GP21 BCLK, GP22 LRCK)
+                // B. Trigger a physical 5ms analog clock sync pulse via I2S DAC (GP17 Data, GP18 BCLK, GP19 LRCK)
                 clock_pulse_remaining_samples = 110;
                 
                 // C. Tick all 4 tracks to advance their playheads using spinlock-free cached parameters
@@ -874,6 +890,8 @@ bool key_was_held[KEY_COUNT] = {false};
 int main() {
     stdio_init_all();
     sleep_ms(2000); // Settling delay for USB debug terminal
+    // Initialize TinyUSB stack so we can detect USB mount state
+    tusb_init();
     
     printf("[Core 0] Initializing Peripherals...\n");
     input.init();
@@ -905,6 +923,9 @@ int main() {
     uint32_t last_time = to_ms_since_boot(get_absolute_time());
 
     while (true) {
+        // Service TinyUSB stack and update USB-MIDI preference
+        tud_task();
+        midi.set_usb_preferred(tud_midi_n_mounted(0));
         uint32_t current_time = to_ms_since_boot(get_absolute_time());
         uint32_t dt = current_time - last_time;
         last_time = current_time;
@@ -949,7 +970,7 @@ int main() {
         // Handle navigation D-pad with responsive auto-repeat
         handle_nav_key(KEY_UP, [&]() {
             if (input.is_shift_active()) {
-                shared_bpm = (shared_bpm + 5 <= 250) ? shared_bpm + 5 : 250;
+                shared_bpm = (shared_bpm + 1 <= 250) ? shared_bpm + 1 : 250;
                 value_changed = true;
             } else {
                 if (cursor_track > 0) { cursor_track--; value_changed = true; }
@@ -958,7 +979,7 @@ int main() {
 
         handle_nav_key(KEY_DOWN, [&]() {
             if (input.is_shift_active()) {
-                shared_bpm = (shared_bpm - 5 >= 40) ? shared_bpm - 5 : 40;
+                shared_bpm = (shared_bpm - 1 >= 40) ? shared_bpm - 1 : 40;
                 value_changed = true;
             } else {
                 if (cursor_track < 3) { cursor_track++; value_changed = true; }
@@ -1010,7 +1031,25 @@ int main() {
         // Handle parameter modifications (A: INC, B: DEC)
         int8_t step_size = input.is_shift_active() ? 10 : 1;
 
-        if (input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A)) {
+        if ((input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A)) && (input.is_pressed(KEY_B) || input.is_long_pressed(KEY_B))) {
+            // Special command: A+B together resets Mutation to 0 when Mutation is selected,
+            // or sets Density to half the current Length when Density is selected.
+            if (cursor_col == 4) {
+                value_changed = true;
+                uint32_t lock_save = lock_shared_params();
+                TrackParams p = shared_params[cursor_track];
+                p.mutation = 0;
+                shared_params[cursor_track] = p;
+                unlock_shared_params(lock_save);
+            } else if (cursor_col == 2) {
+                value_changed = true;
+                uint32_t lock_save = lock_shared_params();
+                TrackParams p = shared_params[cursor_track];
+                p.density = static_cast<uint8_t>((p.length + 1) / 2);
+                shared_params[cursor_track] = p;
+                unlock_shared_params(lock_save);
+            }
+        } else if (input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A)) {
             value_changed = true;
             
             uint32_t lock_save = lock_shared_params();
@@ -1018,20 +1057,24 @@ int main() {
             
             switch (cursor_col) {
                 case 0: { // Clock Divide / Speed select
-                    // Standard divisions: 3, 4, 6, 8, 12, 24, 48
-                    if (p.clock_divide == 3) p.clock_divide = 4;
-                    else if (p.clock_divide == 4) p.clock_divide = 6;
-                    else if (p.clock_divide == 6) p.clock_divide = 8;
-                    else if (p.clock_divide == 8) p.clock_divide = 12;
-                    else if (p.clock_divide == 12) p.clock_divide = 24;
-                    else if (p.clock_divide == 24) p.clock_divide = 48;
-                    else p.clock_divide = 3;
+                    // Standard divisions: /2, x1, x2, x3, x4, x6, x8
+                    if (p.clock_divide == 48) p.clock_divide = 24;
+                    else if (p.clock_divide == 24) p.clock_divide = 12;
+                    else if (p.clock_divide == 12) p.clock_divide = 8;
+                    else if (p.clock_divide == 8) p.clock_divide = 6;
+                    else if (p.clock_divide == 6) p.clock_divide = 4;
+                    else if (p.clock_divide == 4) p.clock_divide = 3;
+                    else p.clock_divide = 48;
                     break;
                 }
                 case 1: p.length = (p.length + step_size <= 32) ? p.length + step_size : 32; break;
                 case 2: p.density = (p.density + step_size <= p.length) ? p.density + step_size : p.length; break;
                 case 3: p.shift = (p.shift + step_size <= 32) ? p.shift + step_size : 32; break;
-                case 4: p.mutation = (p.mutation + step_size <= 100) ? p.mutation + step_size : 100; break;
+                case 4: {
+                    uint8_t next = static_cast<uint8_t>(((p.mutation / 25) + 1) * 25);
+                    p.mutation = (next <= 100) ? next : 100;
+                    break;
+                }
                 case 5: p.jitter = (p.jitter + step_size <= 100) ? p.jitter + step_size : 100; break;
                 case 6: {
                     if (p.gate == 0) {
@@ -1048,9 +1091,9 @@ int main() {
                     p.length = len_options[get_rand_32() % 5];
                     p.density = static_cast<uint8_t>((get_rand_32() % (p.length / 2)) + 2);
                     p.shift = static_cast<uint8_t>(get_rand_32() % p.length);
-                    p.mutation = static_cast<uint8_t>(get_rand_32() % 80);
-                    uint8_t spd_options[] = {3, 4, 6, 8, 12, 24};
-                    p.clock_divide = spd_options[get_rand_32() % 6];
+                    p.mutation = static_cast<uint8_t>((get_rand_32() % 5) * 25);
+                    uint8_t spd_options[] = {48, 24, 12, 8, 6, 4, 3};
+                    p.clock_divide = spd_options[get_rand_32() % 7];
                     p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning
                     // 15% probability to enable SL (Staccato/Legato) mode, otherwise normal gate range
                     if (get_rand_32() % 100 < 15) {
@@ -1075,19 +1118,23 @@ int main() {
             
             switch (cursor_col) {
                 case 0: { // Clock Divide / Speed select
-                    if (p.clock_divide == 48) p.clock_divide = 24;
-                    else if (p.clock_divide == 24) p.clock_divide = 12;
+                    if (p.clock_divide == 24) p.clock_divide = 12;
                     else if (p.clock_divide == 12) p.clock_divide = 8;
                     else if (p.clock_divide == 8) p.clock_divide = 6;
                     else if (p.clock_divide == 6) p.clock_divide = 4;
                     else if (p.clock_divide == 4) p.clock_divide = 3;
-                    else p.clock_divide = 48;
+                    else if (p.clock_divide == 3) p.clock_divide = 48;
+                    else p.clock_divide = 24;
                     break;
                 }
                 case 1: p.length = (p.length - step_size >= 1) ? p.length - step_size : 1; break;
                 case 2: p.density = (p.density - step_size >= 0) ? p.density - step_size : 0; break;
                 case 3: p.shift = (p.shift - step_size >= 0) ? p.shift - step_size : 0; break;
-                case 4: p.mutation = (p.mutation - step_size >= 0) ? p.mutation - step_size : 0; break;
+                case 4: {
+                    uint8_t prev = static_cast<uint8_t>((p.mutation / 25) * 25);
+                    p.mutation = prev;
+                    break;
+                }
                 case 5: p.jitter = (p.jitter - step_size >= 0) ? p.jitter - step_size : 0; break;
                 case 6: {
                     if (p.gate <= 10) {
@@ -1104,9 +1151,9 @@ int main() {
                     p.length = len_options[get_rand_32() % 5];
                     p.density = static_cast<uint8_t>((get_rand_32() % (p.length / 2)) + 2);
                     p.shift = static_cast<uint8_t>(get_rand_32() % p.length);
-                    p.mutation = static_cast<uint8_t>(get_rand_32() % 80);
-                    uint8_t spd_options[] = {3, 4, 6, 8, 12, 24};
-                    p.clock_divide = spd_options[get_rand_32() % 6];
+                    p.mutation = static_cast<uint8_t>((get_rand_32() % 5) * 25);
+                    uint8_t spd_options[] = {48, 24, 12, 8, 6, 4, 3};
+                    p.clock_divide = spd_options[get_rand_32() % 7];
                     p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning
                     // 15% probability to enable SL (Staccato/Legato) mode, otherwise normal gate range
                     if (get_rand_32() % 100 < 15) {

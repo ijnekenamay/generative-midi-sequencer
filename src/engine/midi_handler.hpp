@@ -44,6 +44,18 @@ public:
      */
     void send_stop();
 
+    /**
+     * Enable or disable USB MIDI output preference. When enabled and USB is mounted,
+     * MIDI messages will be sent over USB instead of UART.
+     */
+    void set_usb_preferred(bool en);
+
+    /**
+     * Query whether USB is currently preferred for MIDI output.
+     */
+    bool is_usb_preferred() const;
+
 private:
     void write_raw(const uint8_t* data, uint32_t len);
+    bool usb_preferred = false;
 };

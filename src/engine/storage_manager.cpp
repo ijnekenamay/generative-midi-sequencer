@@ -1,10 +1,13 @@
 #include "storage_manager.hpp"
 #include "pico/stdlib.h"
+#include "pico/platform.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "pico/multicore.h"
 #include <string.h>
 #include <cstdio>
+
+static constexpr uint32_t FLASH_SAVE_OFFSET = (16 * 1024 * 1024) - 4096;
 
 StorageManager::StorageManager() {
     // Constructor
@@ -49,37 +52,36 @@ bool StorageManager::load(TrackParams* out_params) {
     return true;
 }
 
-bool StorageManager::save(const TrackParams* in_params) {
-    printf("[Storage] Saving settings to Flash...\n");
-    
-    // 1. Prepare SaveData structure
-    SaveData data;
-    data.magic = MAGIC_SIGNATURE;
-    
-    // Safely copy volatile parameters to our local struct
-    memcpy(data.params, const_cast<TrackParams*>(in_params), sizeof(TrackParams) * 4);
-    data.checksum = calculate_checksum(data.params);
-    
+static bool __not_in_flash_func(flash_save_to_ram)(const SaveData* data) {
     // 2. Disable interrupts during flash write
     // Erasing or writing to flash pauses the XIP cache. If Core 0 or Core 1 
     // attempts to execute code from flash during this window, the Pico will crash.
-    // Disabling interrupts protects Core 0.
+    // This helper executes from RAM, so flash operations are safe.
     uint32_t saved_interrupts = save_and_disable_interrupts();
-    
-    // Erase the target 4KB sector (must be sector aligned, FLASH_SECTOR_SIZE = 4096)
-    flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE);
-    
-    // Write data (must be page aligned, sizeof(SaveData) is padded to a multiple of FLASH_PAGE_SIZE = 256)
-    // We write a full page of 256 bytes representing our data
+    flash_range_erase(FLASH_SAVE_OFFSET, FLASH_SECTOR_SIZE);
+
     uint8_t write_buffer[FLASH_PAGE_SIZE];
     memset(write_buffer, 0, FLASH_PAGE_SIZE);
-    memcpy(write_buffer, &data, sizeof(SaveData));
-    
-    flash_range_program(FLASH_TARGET_OFFSET, write_buffer, FLASH_PAGE_SIZE);
-    
-    // 3. Restore interrupts
+    memcpy(write_buffer, data, sizeof(SaveData));
+    flash_range_program(FLASH_SAVE_OFFSET, write_buffer, FLASH_PAGE_SIZE);
+
     restore_interrupts(saved_interrupts);
-    
-    printf("[Storage] Settings saved successfully!\n");
     return true;
+}
+
+bool StorageManager::save(const TrackParams* in_params) {
+    printf("[Storage] Saving settings to Flash...\n");
+    
+    SaveData data;
+    data.magic = MAGIC_SIGNATURE;
+    memcpy(data.params, const_cast<TrackParams*>(in_params), sizeof(TrackParams) * 4);
+    data.checksum = calculate_checksum(data.params);
+
+    bool result = flash_save_to_ram(&data);
+    if (result) {
+        printf("[Storage] Settings saved successfully!\n");
+    } else {
+        printf("[Storage] Flash save failed!\n");
+    }
+    return result;
 }
