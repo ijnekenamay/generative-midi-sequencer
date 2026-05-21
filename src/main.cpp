@@ -306,12 +306,7 @@ struct UICellCache {
 };
 
 static UICellCache cell_cache[4][10];
-static float cursor_visual_x = -1.0f;
-static float cursor_visual_y = -1.0f;
-static float cursor_last_drawn_x = -1.0f;
-static float cursor_last_drawn_y = -1.0f;
-static float cursor_last_drawn_w = -1.0f;
-static float cursor_last_drawn_h = -1.0f;
+// Static animation cursor state variables removed
 
 // Thread-safe cached parameters for UI drawing
 static TrackParams draw_params[4];
@@ -737,34 +732,6 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
         draw_track_steps(trk, force_redraw);
     }
 
-    // ----------------------------------------------------
-    // 5. Draw Silky Smooth Eased Visual Cursor Box
-    // ----------------------------------------------------
-    // Erase the PREVIOUS frame's cursor rect EVERY frame (not just on cursor_moved),
-    // because the cursor animates to a new pixel position each frame and leaves a trail.
-    if (cursor_last_drawn_x >= 0) {
-        // Overwrite last frame's cyan border with black
-        display.draw_rect((uint16_t)cursor_last_drawn_x, (uint16_t)cursor_last_drawn_y,
-                          (uint16_t)cursor_last_drawn_w, (uint16_t)cursor_last_drawn_h, COLOR_BLACK);
-        // Restore the cell that was under the old cursor box (its dark-grey border was overwritten)
-        if (last_cursor_track < 4 && last_cursor_col < 10) {
-            draw_single_cell(last_cursor_track, last_cursor_col, false);
-        }
-        // Also restore the current destination cell so it looks correct before we draw the new box
-        if (cursor_track < 4 && cursor_col < 10) {
-            draw_single_cell(cursor_track, cursor_col, true);
-        }
-    }
-
-    // Draw the new cursor box at the current animated position
-    display.draw_rect((uint16_t)cur_x, (uint16_t)cur_y, (uint16_t)cur_w, (uint16_t)cur_h, COLOR_CYAN);
-
-    // Cache drawn bounds for next frame cleanup
-    cursor_last_drawn_x = cur_x;
-    cursor_last_drawn_y = cur_y;
-    cursor_last_drawn_w = cur_w;
-    cursor_last_drawn_h = cur_h;
-
     last_cursor_track = cursor_track;
     last_cursor_col = cursor_col;
 }
@@ -1031,7 +998,10 @@ int main() {
         // Handle parameter modifications (A: INC, B: DEC)
         int8_t step_size = input.is_shift_active() ? 10 : 1;
 
-        if ((input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A)) && (input.is_pressed(KEY_B) || input.is_long_pressed(KEY_B))) {
+        bool a_action = input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A);
+        bool b_action = input.is_pressed(KEY_B) || input.is_long_pressed(KEY_B);
+
+        if (a_action && b_action) {
             // Special command: A+B together resets Mutation to 0 when Mutation is selected,
             // or sets Density to half the current Length when Density is selected.
             if (cursor_col == 4) {
@@ -1049,7 +1019,7 @@ int main() {
                 shared_params[cursor_track] = p;
                 unlock_shared_params(lock_save);
             }
-        } else if (input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A)) {
+        } else if (a_action) {
             value_changed = true;
             
             uint32_t lock_save = lock_shared_params();
@@ -1072,15 +1042,15 @@ int main() {
                 case 3: p.shift = (p.shift + step_size <= 32) ? p.shift + step_size : 32; break;
                 case 4: {
                     uint8_t next = static_cast<uint8_t>(((p.mutation / 25) + 1) * 25);
-                    p.mutation = (next <= 100) ? next : 100;
+                    p.mutation = (next <= 99) ? next : 99;
                     break;
                 }
-                case 5: p.jitter = (p.jitter + step_size <= 100) ? p.jitter + step_size : 100; break;
+                case 5: p.jitter = (p.jitter + step_size <= 99) ? p.jitter + step_size : 99; break;
                 case 6: {
                     if (p.gate == 0) {
                         p.gate = 10;
                     } else {
-                        p.gate = (p.gate + step_size <= 100) ? p.gate + step_size : 100;
+                        p.gate = (p.gate + step_size <= 99) ? p.gate + step_size : 99;
                     }
                     break;
                 }
@@ -1091,7 +1061,7 @@ int main() {
                     p.length = len_options[get_rand_32() % 5];
                     p.density = static_cast<uint8_t>((get_rand_32() % (p.length / 2)) + 2);
                     p.shift = static_cast<uint8_t>(get_rand_32() % p.length);
-                    p.mutation = static_cast<uint8_t>((get_rand_32() % 5) * 25);
+                    p.mutation = 0;
                     uint8_t spd_options[] = {48, 24, 12, 8, 6, 4, 3};
                     p.clock_divide = spd_options[get_rand_32() % 7];
                     p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning
@@ -1108,9 +1078,7 @@ int main() {
             
             shared_params[cursor_track] = p;
             unlock_shared_params(lock_save);
-        }
-
-        if (input.is_pressed(KEY_B) || input.is_long_pressed(KEY_B)) {
+        } else if (b_action) {
             value_changed = true;
             
             uint32_t lock_save = lock_shared_params();
@@ -1131,8 +1099,9 @@ int main() {
                 case 2: p.density = (p.density - step_size >= 0) ? p.density - step_size : 0; break;
                 case 3: p.shift = (p.shift - step_size >= 0) ? p.shift - step_size : 0; break;
                 case 4: {
-                    uint8_t prev = static_cast<uint8_t>((p.mutation / 25) * 25);
-                    p.mutation = prev;
+                    if (p.mutation > 0) {
+                        p.mutation = static_cast<uint8_t>(((p.mutation - 1) / 25) * 25);
+                    }
                     break;
                 }
                 case 5: p.jitter = (p.jitter - step_size >= 0) ? p.jitter - step_size : 0; break;
@@ -1151,7 +1120,7 @@ int main() {
                     p.length = len_options[get_rand_32() % 5];
                     p.density = static_cast<uint8_t>((get_rand_32() % (p.length / 2)) + 2);
                     p.shift = static_cast<uint8_t>(get_rand_32() % p.length);
-                    p.mutation = static_cast<uint8_t>((get_rand_32() % 5) * 25);
+                    p.mutation = 0;
                     uint8_t spd_options[] = {48, 24, 12, 8, 6, 4, 3};
                     p.clock_divide = spd_options[get_rand_32() % 7];
                     p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning

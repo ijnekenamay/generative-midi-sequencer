@@ -18,7 +18,7 @@ struct Scale {
 
 class NoteGenerator {
 private:
-    uint16_t shift_register; // 16-bit shift register for Turing Machine S&H
+    uint32_t shift_register; // 32-bit shift register for variable length Turing Machine S&H
     
     // Static scales definitions
     static const Scale SCALES[SCALE_COUNT];
@@ -47,7 +47,7 @@ public:
      * @param mutated Optional pointer to boolean set to true if a random mutation occurs.
      * @return The raw 8-bit DAC-like value extracted from the register.
      */
-    uint8_t step(uint8_t mutation_rate, bool* mutated = nullptr);
+    uint8_t step(uint8_t mutation_rate, uint8_t length = 16, bool* mutated = nullptr);
 
     /**
      * Quantizes a raw 8-bit value to a specified scale and root note.

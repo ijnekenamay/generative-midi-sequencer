@@ -21,18 +21,18 @@ NoteGenerator::NoteGenerator() {
 
 void NoteGenerator::reset() {
     // Initialize shift register with a non-zero pattern (classic pseudo-random start)
-    shift_register = 0x9E37; 
+    shift_register = 0x9E3779B9; 
 }
 
 void NoteGenerator::randomize_seed() {
     // Generate a random 16-bit seed using the hardware random number generator
-    shift_register = static_cast<uint16_t>(get_rand_32() & 0xFFFF);
+    shift_register = get_rand_32();
     if (shift_register == 0) {
-        shift_register = 0x9E37; // Avoid all zeros which lock the shift register
+        shift_register = 0x9E3779B9; // Avoid all zeros which lock the shift register
     }
 }
 
-uint8_t NoteGenerator::step(uint8_t mutation_rate, bool* mutated) {
+uint8_t NoteGenerator::step(uint8_t mutation_rate, uint8_t length, bool* mutated) {
     if (mutated) {
         *mutated = false;
     }
@@ -50,9 +50,16 @@ uint8_t NoteGenerator::step(uint8_t mutation_rate, bool* mutated) {
     }
     
     // Shift right and inject feedback bit into MSB (bit 15)
+    // Ensure length is valid (1 to 32)
+    uint8_t bit_pos = (length > 0 && length <= 32) ? (length - 1) : 15;
+    
+    // Shift right
     shift_register = (shift_register >> 1);
+    
+    // Clear the injected bit position just in case, then inject feedback bit
+    shift_register &= ~(1UL << bit_pos);
     if (feedback_bit) {
-        shift_register |= 0x8000;
+        shift_register |= (1UL << bit_pos);
     }
     
     // Return the lower 8 bits of the register as a raw CV-like value

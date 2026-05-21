@@ -68,14 +68,14 @@ bool Track::tick(uint32_t master_tick, uint32_t bpm, MidiHandler& midi) {
         // Calculate if the current step is a Euclidean hit
         bool triggered = rhythm.calculate_step(current_step, length, density, shift);
         
+        // Step the Turing Machine EVERY step to keep its loop perfectly synchronized with the rhythm
+        bool mutated = false;
+        uint8_t raw_cv = pitch.step(mutation_rate, length, &mutated);
+        if (mutated) {
+            shared_track_mutated[track_id] = true;
+        }
+
         if (triggered) {
-            // Step the Turing Machine to fetch a new pitch
-            bool mutated = false;
-            uint8_t raw_cv = pitch.step(mutation_rate, &mutated);
-            if (mutated) {
-                shared_track_mutated[track_id] = true;
-            }
-            
             // Quantize pitch to the track's scale and root note
             uint8_t note = NoteGenerator::quantize(raw_cv, root_note, scale_type);
             
