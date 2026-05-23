@@ -7,6 +7,10 @@ enum ScaleType {
     SCALE_PHRYGIAN,
     SCALE_DORIAN,
     SCALE_MINOR_PENTATONIC,
+    SCALE_HUNGARIAN_MINOR,  // エキゾチック・ダーク (0,2,3,6,7,8,11)
+    SCALE_WHOLE_TONE,       // 夢幻的・浮遊感 (0,2,4,6,8,10)
+    SCALE_BLUES,            // ブルース・グルーヴ (0,3,5,6,7,10)
+    SCALE_MAJOR_PENTATONIC, // ブライト・アジア (0,2,4,7,9)
     SCALE_COUNT
 };
 

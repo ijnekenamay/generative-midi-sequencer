@@ -22,7 +22,7 @@ void Track::reset() {
     root_note = 36; // C1
     scale_type = SCALE_CHROMATIC;
     clock_divide = 6; // At 24 PPQN, divide by 6 = 16th notes
-    jitter_rate = 0;
+    prob_rate = 100; // Default: always fire (0 = never, 100 = always)
     gate_rate = 50;
     clock_ticks = 0;
     is_muted = false;
@@ -31,13 +31,14 @@ void Track::reset() {
     has_pending_note_off = false;
     pending_note_on_time = 0;
     pending_note_off_time = 0;
+    pending_velocity = 100;
 }
 
 void Track::randomize_pattern() {
     pitch.randomize_seed();
 }
 
-void Track::set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint8_t root, ScaleType scale, uint8_t divide, uint8_t jit, uint8_t gt, bool muted) {
+void Track::set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint8_t root, ScaleType scale, uint8_t divide, uint8_t prob, uint8_t gt, bool muted) {
     length = (len > 0) ? len : 1;
     density = (dens <= length) ? dens : length;
     shift = shf;
@@ -45,7 +46,7 @@ void Track::set_params(uint8_t len, uint8_t dens, uint8_t shf, uint8_t mut, uint
     root_note = root;
     scale_type = scale;
     clock_divide = (divide > 0) ? divide : 1;
-    jitter_rate = (jit <= 100) ? jit : 100;
+    prob_rate = (prob <= 100) ? prob : 100;
     gate_rate = (gt == 0 || (gt >= 10 && gt <= 100)) ? gt : 50;
     is_muted = muted;
 }
@@ -76,25 +77,53 @@ bool Track::tick(uint32_t master_tick, uint32_t bpm, MidiHandler& midi) {
         }
 
         if (triggered) {
-            // Quantize pitch to the track's scale and root note
-            uint8_t note = NoteGenerator::quantize(raw_cv, root_note, scale_type);
-            
-            // Calculate stochastic microtiming jitter delay
-            uint64_t jitter_us = 0;
-            if (jitter_rate > 0) {
-                // Up to (jitter_rate * 150) microseconds of delay
-                jitter_us = get_rand_32() % (static_cast<uint64_t>(jitter_rate) * 150ULL);
+            // --- Probability gate (Elektron-style) ---
+            // Randomly skip this Euclidean hit based on prob_rate.
+            // The Turing Machine still advances every step regardless, so the
+            // pitch sequence stays consistent — only the note-on is suppressed.
+            bool fire = (prob_rate >= 100) ||
+                        ((get_rand_32() % 100) < prob_rate);
+
+            if (fire) {
+                // Quantize pitch to the track's scale and root note
+                uint8_t note = NoteGenerator::quantize(raw_cv, root_note, scale_type);
+
+                // --- Dynamic Velocity Engine ---
+                // Base velocity: derived from Turing Machine raw_cv bits.
+                // raw_cv naturally repeats at low mutation (locked groove) and randomizes
+                // at high mutation, so velocity organically follows the same pattern.
+                // Range: 50-115 before accent boost.
+                uint8_t vel = 50 + ((raw_cv >> 1) & 0x3F); // 50..113
+
+                // Metric accent: boost velocity at musically important positions.
+                // Step 0 is the downbeat — always the strongest accent.
+                // Quarter-note positions (length/4 multiples) get a lighter accent.
+                bool is_downbeat = (current_step == 0);
+                bool is_quarter  = (length >= 4) && (current_step > 0) &&
+                                   ((current_step % (length / 4)) == 0);
+
+                if (is_downbeat) {
+                    vel = (vel + 14 > 127) ? 127 : vel + 14;  // strong downbeat, 64..127
+                } else if (is_quarter) {
+                    vel = (vel + 7  > 118) ? 118 : vel + 7;   // quarter accent, 57..118
+                }
+                // Unaccented off-beats stay in the 50-113 range — quieter, sitting back in
+                // the mix and adding natural perceived depth without any new UI parameter.
+                pending_velocity = vel;
+                // --------------------------------
+
+                // Schedule the Note-On event with no jitter delay
+                pending_note_on_time = time_us_64();
+                pending_note = note;
+                has_pending_note = true;
             }
-            
-            // Schedule the Note-On event asynchronously
-            pending_note_on_time = time_us_64() + jitter_us;
-            pending_note = note;
-            has_pending_note = true;
         }
         
         // Advance to the next step
         current_step = (current_step + 1) % length;
-        return triggered;
+        // Return true only when a note was actually scheduled
+        // (Euclidean hit AND probability gate both passed)
+        return has_pending_note;
     }
     return false;
 }
@@ -102,12 +131,12 @@ bool Track::tick(uint32_t master_tick, uint32_t bpm, MidiHandler& midi) {
 void Track::update_scheduled_events(uint32_t bpm, MidiHandler& midi) {
     uint64_t now = time_us_64();
     
-    // 1. Dispatch scheduled Note-On (after Jitter delay)
+    // 1. Dispatch scheduled Note-On
     if (has_pending_note && now >= pending_note_on_time) {
         // Double-check: turn off previous active note (mono-legato override)
         silence(midi);
         
-        midi.note_on(midi_channel, pending_note, 100);
+        midi.note_on(midi_channel, pending_note, pending_velocity);
         last_played_note = pending_note;
         is_note_active = true;
         has_pending_note = false;

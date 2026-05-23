@@ -37,10 +37,11 @@ void unlock_shared_params(uint32_t save) {
 
 // Share sequencer settings between Core 0 and Core 1
 TrackParams shared_params[4] = {
-    {16, 4, 0, 0, 36, SCALE_MINOR_PENTATONIC, 6, 0, 50, false}, // T1 (Kick/Bass)
-    {16, 5, 2, 30, 60, SCALE_PHRYGIAN, 6, 0, 50, false},        // T2 (Stochastic Lead)
-    {16, 8, 3, 10, 72, SCALE_CHROMATIC, 3, 0, 50, false},       // T3 (Hi-hats/Offbeats)
-    {16, 3, 0, 15, 48, SCALE_DORIAN, 12, 0, 50, false}          // T4 (Drone/Chord)
+    //                                               prob gate
+    {16, 4, 0, 0, 36, SCALE_MINOR_PENTATONIC, 6, 100, 50, false}, // T1 (Kick/Bass)        — 100% always fires
+    {16, 5, 2, 30, 60, SCALE_PHRYGIAN,         6,  75, 50, false}, // T2 (Stochastic Lead) — 75% for variation
+    {16, 8, 3, 10, 72, SCALE_CHROMATIC,         3,  85, 50, false}, // T3 (Hi-hats/Offbeats)— 85% creates gaps
+    {16, 3, 0, 15, 48, SCALE_DORIAN,           12,  90, 50, false}  // T4 (Drone/Chord)    — 90% mostly solid
 };
 
 // Core 1 to Core 0 feedback (for visual step indicator)
@@ -296,7 +297,7 @@ struct UICellCache {
     uint8_t density = 0;
     uint8_t shift = 0;
     uint8_t mutation = 0;
-    uint8_t jitter = 0;
+    uint8_t probability = 0;
     uint8_t gate = 0;
     uint8_t root_note = 0;
     uint8_t scale_type = 0;
@@ -364,7 +365,15 @@ void draw_single_cell(uint8_t trk, uint8_t col, bool is_selected) {
             case 2: sprintf(val_str, "%02d", draw_params[trk].density); break;
             case 3: sprintf(val_str, "%02d", draw_params[trk].shift); break;
             case 4: sprintf(val_str, "%02d", draw_params[trk].mutation); break;
-            case 5: sprintf(val_str, "%02d", draw_params[trk].jitter); break;
+            case 5: {
+                uint8_t prob = draw_params[trk].probability;
+                if (prob >= 100) {
+                    sprintf(val_str, "FL"); // FL = Full (100%)
+                } else {
+                    sprintf(val_str, "%02d", prob);
+                }
+                break;
+            }
             case 6: {
                 if (draw_params[trk].gate == 0) {
                     sprintf(val_str, "SL");
@@ -518,7 +527,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
 
     bool master_flash = sequencer_playing && ((shared_master_ticks / 12) % 2 == 0);
     uint8_t current_scale_idx = draw_params[cursor_track].scale_type;
-    if (current_scale_idx >= 5) current_scale_idx = 0;
+    if (current_scale_idx >= SCALE_COUNT) current_scale_idx = 0;
 
     bool header_needs_update = force_redraw || 
                                (master_flash != last_master_flash) ||
@@ -576,7 +585,17 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
         display.draw_text(118, 20, sequencer_playing ? "RUN" : "STOP", pill_fg, pill_bg, 1);
 
         // Scale Capsule
-        const char* scale_names[] = {"CHROM", "MINOR", "PHRYG", "DORIN", "PENTA"};
+        const char* scale_names[] = {
+            "CHROM",  // Chromatic
+            "MINOR",  // Natural Minor
+            "PHRYG",  // Phrygian
+            "DORIN",  // Dorian
+            "PENTA",  // Minor Pentatonic
+            "HUNG",   // Hungarian Minor
+            "WHOLE",  // Whole Tone
+            "BLUES",  // Blues
+            "MAJP",   // Major Pentatonic
+        };
         char scale_lbl[16];
         sprintf(scale_lbl, "SCL:%s", scale_names[current_scale_idx]);
         
@@ -659,7 +678,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
             uint8_t den = draw_params[trk].density;
             uint8_t shf = draw_params[trk].shift;
             uint8_t mut = draw_params[trk].mutation;
-            uint8_t jit = draw_params[trk].jitter;
+            uint8_t prob = draw_params[trk].probability;
             uint8_t gat = draw_params[trk].gate;
             uint8_t rot = draw_params[trk].root_note;
             uint8_t scl = draw_params[trk].scale_type;
@@ -675,7 +694,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
                          (cache.density != den) ||
                          (cache.shift != shf) ||
                          (cache.mutation != mut) ||
-                         (cache.jitter != jit) ||
+                         (cache.probability != prob) ||
                          (cache.gate != gat) ||
                          (cache.root_note != rot) ||
                          (cache.scale_type != scl) ||
@@ -692,7 +711,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
                 cache.density = den;
                 cache.shift = shf;
                 cache.mutation = mut;
-                cache.jitter = jit;
+                cache.probability = prob;
                 cache.gate = gat;
                 cache.root_note = rot;
                 cache.scale_type = scl;
@@ -710,7 +729,7 @@ void update_ui_dashboard(float cur_x, float cur_y, float cur_w, float cur_h) {
                     case 2: icon_ptr = icon_den_8x8; break;
                     case 3: icon_ptr = icon_shf_8x8; break;
                     case 4: icon_ptr = icon_mut_8x8; break;
-                    case 5: icon_ptr = icon_jit_8x8; break;
+                    case 5: icon_ptr = icon_prb_8x8; break;
                     case 6: icon_ptr = icon_gat_8x8; break;
                     case 7: icon_ptr = icon_rot_8x8; break;
                     case 8: icon_ptr = icon_scl_8x8; break;
@@ -768,7 +787,7 @@ void core1_entry() {
             local_p.root_note,
             (ScaleType)local_p.scale_type,
             local_p.clock_divide,
-            local_p.jitter,
+            local_p.probability,
             local_p.gate,
             local_p.is_muted
         );
@@ -828,7 +847,7 @@ void core1_entry() {
                         local_p.root_note,
                         (ScaleType)local_p.scale_type,
                         local_p.clock_divide,
-                        local_p.jitter,
+                        local_p.probability,
                         local_p.gate,
                         local_p.is_muted
                     );
@@ -882,6 +901,14 @@ int main() {
     // Instantiate and attempt loading settings from internal Flash
     StorageManager storage;
     storage.load(shared_params);
+
+    // Sanitize probability after load: old save data has jitter=0 in that field,
+    // which maps to probability=0 (never fire). Clamp to a sensible minimum.
+    for (int i = 0; i < 4; ++i) {
+        if (shared_params[i].probability == 0) {
+            shared_params[i].probability = 100; // Safe fallback: always fire
+        }
+    }
 
     printf("[Core 0] Launching Core 1 Realtime Engine...\n");
     multicore_launch_core1(core1_entry);
@@ -1045,7 +1072,12 @@ int main() {
                     p.mutation = (next <= 99) ? next : 99;
                     break;
                 }
-                case 5: p.jitter = (p.jitter + step_size <= 99) ? p.jitter + step_size : 99; break;
+                case 5: {
+                    // Probability: increment in steps of 10 (shift) or 5 (normal), capped at 100
+                    uint8_t step = input.is_shift_active() ? 10 : 5;
+                    p.probability = (p.probability + step <= 100) ? p.probability + step : 100;
+                    break;
+                }
                 case 6: {
                     if (p.gate == 0) {
                         p.gate = 10;
@@ -1064,7 +1096,8 @@ int main() {
                     p.mutation = 0;
                     uint8_t spd_options[] = {48, 24, 12, 8, 6, 4, 3};
                     p.clock_divide = spd_options[get_rand_32() % 7];
-                    p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning
+                    // RND: probability stays meaningful (70-100 range for musical gates)
+                    p.probability = static_cast<uint8_t>(70 + (get_rand_32() % 31));
                     // 15% probability to enable SL (Staccato/Legato) mode, otherwise normal gate range
                     if (get_rand_32() % 100 < 15) {
                         p.gate = 0; // SL mode
@@ -1104,7 +1137,12 @@ int main() {
                     }
                     break;
                 }
-                case 5: p.jitter = (p.jitter - step_size >= 0) ? p.jitter - step_size : 0; break;
+                case 5: {
+                    // Probability: decrement in steps of 10 (shift) or 5 (normal), min 0
+                    uint8_t step = input.is_shift_active() ? 10 : 5;
+                    p.probability = (p.probability >= step) ? p.probability - step : 0;
+                    break;
+                }
                 case 6: {
                     if (p.gate <= 10) {
                         p.gate = 0;
@@ -1123,7 +1161,8 @@ int main() {
                     p.mutation = 0;
                     uint8_t spd_options[] = {48, 24, 12, 8, 6, 4, 3};
                     p.clock_divide = spd_options[get_rand_32() % 7];
-                    p.jitter = 0; // Jitter is strictly set to 0 as requested for musical tuning
+                    // RND: probability stays meaningful (70-100 range for musical gates)
+                    p.probability = static_cast<uint8_t>(70 + (get_rand_32() % 31));
                     // 15% probability to enable SL (Staccato/Legato) mode, otherwise normal gate range
                     if (get_rand_32() % 100 < 15) {
                         p.gate = 0; // SL mode
