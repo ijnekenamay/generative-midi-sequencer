@@ -1023,7 +1023,10 @@ int main() {
         }
 
         // Handle parameter modifications (A: INC, B: DEC)
-        int8_t step_size = input.is_shift_active() ? 10 : 1;
+        // ROT (col 7): normal A/B = octave (+12), LT+A/B = semitone (+1) — reversed from other cols
+        // Other cols:  normal A/B = fine (+1),   LT+A/B = coarse (+10)
+        int8_t step_size = input.is_shift_active() ? 10 : 1;         // for LEN/DEN/SHF
+        int8_t rot_step  = input.is_shift_active() ? 1  : 12;        // for ROT: octave primary
 
         bool a_action = input.is_pressed(KEY_A) || input.is_long_pressed(KEY_A);
         bool b_action = input.is_pressed(KEY_B) || input.is_long_pressed(KEY_B);
@@ -1073,20 +1076,22 @@ int main() {
                     break;
                 }
                 case 5: {
-                    // Probability: increment in steps of 10 (shift) or 5 (normal), capped at 100
-                    uint8_t step = input.is_shift_active() ? 10 : 5;
-                    p.probability = (p.probability + step <= 100) ? p.probability + step : 100;
+                    // PRB — 25-step snap: 0 → 25 → 50 → 75 → 100(FL)
+                    uint8_t next = static_cast<uint8_t>(((p.probability / 25) + 1) * 25);
+                    p.probability = (next <= 100) ? next : 100;
                     break;
                 }
                 case 6: {
+                    // GAT — 25-step snap: SL(0) → 25 → 50 → 75 → 99
                     if (p.gate == 0) {
-                        p.gate = 10;
+                        p.gate = 25;
                     } else {
-                        p.gate = (p.gate + step_size <= 99) ? p.gate + step_size : 99;
+                        uint8_t next = static_cast<uint8_t>(((p.gate / 25) + 1) * 25);
+                        p.gate = (next <= 99) ? next : 99;
                     }
                     break;
                 }
-                case 7: p.root_note = (p.root_note + step_size <= 127) ? p.root_note + step_size : 127; break;
+                case 7: p.root_note = (p.root_note + rot_step <= 127) ? p.root_note + rot_step : 127; break;
                 case 8: p.scale_type = (p.scale_type + 1 < SCALE_COUNT) ? p.scale_type + 1 : 0; break;
                 case 9: { // RND button - Mutate rhythm & pitch pattern!
                     uint8_t len_options[] = {8, 12, 16, 24, 32};
@@ -1138,20 +1143,22 @@ int main() {
                     break;
                 }
                 case 5: {
-                    // Probability: decrement in steps of 10 (shift) or 5 (normal), min 0
-                    uint8_t step = input.is_shift_active() ? 10 : 5;
-                    p.probability = (p.probability >= step) ? p.probability - step : 0;
-                    break;
-                }
-                case 6: {
-                    if (p.gate <= 10) {
-                        p.gate = 0;
-                    } else {
-                        p.gate = (p.gate - step_size >= 10) ? p.gate - step_size : 10;
+                    // PRB — 25-step snap: 100(FL) → 75 → 50 → 25 → 0
+                    if (p.probability > 0) {
+                        p.probability = static_cast<uint8_t>(((p.probability - 1) / 25) * 25);
                     }
                     break;
                 }
-                case 7: p.root_note = (p.root_note - step_size >= 0) ? p.root_note - step_size : 0; break;
+                case 6: {
+                    // GAT — 25-step snap: 99 → 75 → 50 → 25 → SL(0)
+                    if (p.gate <= 25) {
+                        p.gate = 0; // drop to SL mode
+                    } else {
+                        p.gate = static_cast<uint8_t>(((p.gate - 1) / 25) * 25);
+                    }
+                    break;
+                }
+                case 7: p.root_note = (p.root_note >= rot_step) ? p.root_note - rot_step : 0; break;
                 case 8: p.scale_type = (p.scale_type > 0) ? p.scale_type - 1 : SCALE_COUNT - 1; break;
                 case 9: { // RND button - Mutate rhythm & pitch pattern!
                     uint8_t len_options[] = {8, 12, 16, 24, 32};
