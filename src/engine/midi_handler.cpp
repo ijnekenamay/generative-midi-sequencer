@@ -63,15 +63,16 @@ void MidiHandler::send_stop() {
 }
 
 void MidiHandler::write_raw(const uint8_t* data, uint32_t len) {
-    // If TinyUSB is mounted and USB is preferred, send over USB-MIDI
-    #if 1
-    if (usb_preferred && tud_midi_n_mounted(0)) {
+    // Always send over UART (TRS hardware MIDI output)
+    uart_write_blocking(uart0, data, len);
+
+    // Additionally send over USB-MIDI if connected (simultaneous dual output)
+    if (tud_midi_n_mounted(0)) {
         // Build a 4-byte USB-MIDI packet (Cable 0)
         uint8_t cin = 0x0;
-        uint8_t status = data[0] & 0xF0;
-        if ((data[0] & 0xF0) == 0x90) cin = 0x9; // Note On
-        else if ((data[0] & 0xF0) == 0x80) cin = 0x8; // Note Off
-        else if (data[0] == 0xF8) cin = 0xF; // Timing Clock (single byte)
+        if ((data[0] & 0xF0) == 0x90) cin = 0x9;      // Note On
+        else if ((data[0] & 0xF0) == 0x80) cin = 0x8;  // Note Off
+        else if (data[0] == 0xF8) cin = 0xF;            // Timing Clock (single byte)
         else cin = 0x4;
 
         uint8_t packet[4] = { (uint8_t)((0 << 4) | (cin & 0x0F)), 0, 0, 0 };
@@ -79,14 +80,8 @@ void MidiHandler::write_raw(const uint8_t* data, uint32_t len) {
         if (len > 1) packet[2] = data[1];
         if (len > 2) packet[3] = data[2];
 
-        // Write packet via TinyUSB MIDI packet API
         tud_midi_n_packet_write(0, packet);
-        return;
     }
-    #endif
-
-    // Fallback: Transmit data blocking through the UART FIFO
-    uart_write_blocking(uart0, data, len);
 }
 
 void MidiHandler::set_usb_preferred(bool en) {
