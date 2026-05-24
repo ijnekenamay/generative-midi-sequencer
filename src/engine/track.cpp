@@ -115,6 +115,7 @@ bool Track::tick(uint32_t master_tick, uint32_t bpm, MidiHandler& midi) {
                 // Schedule the Note-On event with no jitter delay
                 pending_note_on_time = time_us_64();
                 pending_note = note;
+                pending_raw_cv = raw_cv; // Save for SL gate mode in update_scheduled_events
                 has_pending_note = true;
             }
         }
@@ -144,18 +145,22 @@ void Track::update_scheduled_events(uint32_t bpm, MidiHandler& midi) {
         // Calculate precise step duration for gate calculation
         uint64_t step_duration_us = (60ULL * 1000000ULL * clock_divide) / (bpm * 24ULL);
         
-        // Calculate base gate duration based on gate percentage
+        // Calculate gate duration based on gate percentage.
+        // Gate length is deterministic — no random variation — so that mutation=0
+        // produces a perfectly repeating phrase regardless of clock_divide / gate parity.
         uint8_t actual_gate = gate_rate;
         if (gate_rate == 0) {
-            // SL mode: dynamically randomize between Staccato (15) and Legato (95)
-            actual_gate = (get_rand_32() % 2 == 0) ? 15 : 95;
+            // SL mode: alternate Staccato (15%) / Legato (95%) driven by the
+            // Turing Machine CV that was captured when the note was scheduled.
+            // At mutation=0 pending_raw_cv is deterministic, so SL also repeats cleanly.
+            actual_gate = (pending_raw_cv & 1) ? 15 : 95;
         }
-        uint64_t base_gate_us = (step_duration_us * actual_gate) / 100ULL;
-        
-        // Add random gate length variation (up to 30% of the base gate length)
-        uint64_t max_var = base_gate_us / 3ULL;
-        uint64_t variation = (max_var > 0) ? (get_rand_32() % max_var) : 0ULL;
-        uint64_t gate_duration_us = base_gate_us + variation - (max_var / 2ULL);
+        // Snap gate to a whole number of MIDI ticks so Note-Off always lands on a
+        // tick boundary.  This guarantees phase alignment for any divide/gate combo.
+        uint64_t tick_us = (60ULL * 1000000ULL) / (bpm * 24ULL); // 1 PPQN tick
+        uint64_t gate_ticks = ((uint64_t)clock_divide * actual_gate + 50ULL) / 100ULL;
+        if (gate_ticks == 0) gate_ticks = 1; // Minimum 1 tick
+        uint64_t gate_duration_us = tick_us * gate_ticks;
         if (gate_duration_us < 5000ULL) {
             gate_duration_us = 5000ULL; // Ensure at least 5ms to trigger synth voice
         }

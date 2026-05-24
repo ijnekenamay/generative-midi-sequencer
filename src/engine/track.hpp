@@ -49,6 +49,7 @@ private:
     uint8_t pending_note;
     uint8_t pending_gate;
     uint8_t pending_velocity;  // Dynamic velocity computed at schedule time
+    uint8_t pending_raw_cv;    // Raw Turing Machine CV saved for SL gate mode
     bool has_pending_note;
     uint64_t pending_note_off_time;
     bool has_pending_note_off;
